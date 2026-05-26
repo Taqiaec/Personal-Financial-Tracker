@@ -1,0 +1,193 @@
+import * as functions from 'firebase-functions';
+import * as admin from 'firebase-admin';
+import { sendMessage } from './telegram';
+
+function db() { return admin.firestore(); }
+
+function formatCurrency(n: number): string {
+  return new Intl.NumberFormat('id-ID').format(n);
+}
+
+function getTodayWIB(): string {
+  const now = new Date();
+  const wib = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+  return wib.toISOString().split('T')[0];
+}
+
+function formatDateId(dateStr: string): string {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+  const [y, m, d] = dateStr.split('-');
+  return `${parseInt(d, 10)} ${months[parseInt(m, 10) - 1]} ${y}`;
+}
+
+// Daily recap: every day at 9 PM WIB (14:00 UTC)
+export const dailyRecap = functions
+  .runWith({ secrets: ['TELEGRAM_BOT_TOKEN'] })
+  .pubsub.schedule('0 14 * * *')
+  .timeZone('Asia/Jakarta')
+  .onRun(async (_context) => {
+    const today = getTodayWIB();
+    const todayLabel = formatDateId(today);
+
+    const usersSnap = await db().collection('telegramUsers').get();
+    if (usersSnap.empty) {
+      console.log('No linked Telegram users, skipping daily recap');
+      return;
+    }
+
+    // Phase 1: Parallel Firestore reads for all users
+    const userResults = await Promise.all(usersSnap.docs.map(async (doc) => {
+      const chatId = parseInt(doc.id, 10);
+      if (!chatId) return null;
+      const uid = doc.data().uid;
+
+      try {
+        const txSnap = await db()
+          .collection('users').doc(uid).collection('transactions')
+          .where('date', '==', today)
+          .get();
+
+        // Single-pass aggregation
+        let incomeTotal = 0, expenseTotal = 0, incomeCount = 0, expenseCount = 0;
+        const catMap: Record<string, number> = {};
+        txSnap.forEach(t => {
+          const d = t.data();
+          if (d.type === 'income') { incomeTotal += d.amount; incomeCount++; }
+          else if (d.type === 'expense') { expenseTotal += d.amount; expenseCount++; catMap[d.category] = (catMap[d.category] || 0) + d.amount; }
+        });
+
+        if (incomeCount === 0 && expenseCount === 0) return null;
+
+        const net = incomeTotal - expenseTotal;
+        const netSign = net >= 0 ? '+' : '';
+        const topCat = Object.entries(catMap).sort((a, b) => b[1] - a[1])[0];
+
+        const lines: string[] = [];
+        if (expenseCount > 0) lines.push(`📤 Pengeluaran: ${expenseCount} transaksi, Rp ${formatCurrency(expenseTotal)}`);
+        if (incomeCount > 0) lines.push(`📥 Pemasukan: ${incomeCount} transaksi, Rp ${formatCurrency(incomeTotal)}`);
+        lines.push(`💰 Net: ${netSign}Rp ${formatCurrency(net)}`);
+        if (topCat) lines.push(`🏷 Kategori terbesar: ${topCat[0]} (Rp ${formatCurrency(topCat[1])})`);
+
+        const msg =
+          `<b>📋 Recap Hari Ini — ${todayLabel}</b>\n\n` +
+          lines.join('\n');
+
+        return { chatId, msg };
+      } catch (err: any) {
+        console.error(`Failed to fetch daily recap for chat ${chatId}:`, err.message);
+        return { chatId, error: true };
+      }
+    }));
+
+    // Phase 2: Sequential Telegram sends (respect rate limits)
+    let sent = 0, failed = 0;
+    for (const result of userResults) {
+      if (!result) continue;
+      if ((result as any).error) { failed++; continue; }
+      try {
+        await sendMessage(result.chatId, result.msg!);
+        sent++;
+      } catch (err: any) {
+        console.error(`Failed to send daily recap to chat ${result.chatId}:`, err.message);
+        failed++;
+      }
+    }
+
+    console.log(`Daily recap done: sent to ${sent} users, ${failed} failed`);
+  });
+
+// Weekly recap: every Sunday at 9 PM WIB
+export const weeklyRecap = functions
+  .runWith({ secrets: ['TELEGRAM_BOT_TOKEN'] })
+  .pubsub.schedule('0 14 * * 0')
+  .timeZone('Asia/Jakarta')
+  .onRun(async (_context) => {
+    const today = getTodayWIB();
+
+    // Calculate 7 days ago
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    const wibStart = new Date(d.getTime() + 7 * 60 * 60 * 1000);
+    const start = wibStart.toISOString().split('T')[0];
+
+    const startLabel = formatDateId(start);
+    const todayLabel = formatDateId(today);
+
+    const usersSnap = await db().collection('telegramUsers').get();
+    if (usersSnap.empty) {
+      console.log('No linked Telegram users, skipping weekly recap');
+      return;
+    }
+
+    // Phase 1: Parallel Firestore reads for all users
+    const userResults = await Promise.all(usersSnap.docs.map(async (doc) => {
+      const chatId = parseInt(doc.id, 10);
+      if (!chatId) return null;
+      const uid = doc.data().uid;
+
+      try {
+        const txSnap = await db()
+          .collection('users').doc(uid).collection('transactions')
+          .where('date', '>=', start)
+          .where('date', '<=', today)
+          .get();
+
+        // Single-pass aggregation + day grouping
+        let incomeTotal = 0, expenseTotal = 0, txnCount = 0;
+        const dayMap: Record<string, { inc: number; exp: number }> = {};
+        txSnap.forEach(t => {
+          const d = t.data();
+          if (!dayMap[d.date]) dayMap[d.date] = { inc: 0, exp: 0 };
+          if (d.type === 'income') { incomeTotal += d.amount; dayMap[d.date].inc += d.amount; }
+          else if (d.type === 'expense') { expenseTotal += d.amount; dayMap[d.date].exp += d.amount; }
+          txnCount++;
+        });
+
+        if (txnCount === 0) return null;
+
+        const net = incomeTotal - expenseTotal;
+        const netSign = net >= 0 ? '+' : '';
+
+        const dayLines = Object.entries(dayMap)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .slice(-7)
+          .map(([date, vals]) => {
+            const day = date.split('-')[2];
+            const dayNet = vals.inc - vals.exp;
+            const sign = dayNet >= 0 ? '+' : '';
+            return `• ${day}: ${sign}Rp ${formatCurrency(Math.abs(dayNet))}`;
+          });
+
+        const msg =
+          `<b>📊 Recap Mingguan</b>\n` +
+          `${startLabel} — ${todayLabel}\n\n` +
+          `📥 Pemasukan: Rp ${formatCurrency(incomeTotal)}\n` +
+          `📤 Pengeluaran: Rp ${formatCurrency(expenseTotal)}\n` +
+          `💰 Net: ${netSign}Rp ${formatCurrency(net)}\n` +
+          `📝 Total: ${txnCount} transaksi\n\n` +
+          `<b>Per Hari:</b>\n` +
+          dayLines.join('\n');
+
+        return { chatId, msg };
+      } catch (err: any) {
+        console.error(`Failed to fetch weekly recap for chat ${chatId}:`, err.message);
+        return { chatId, error: true };
+      }
+    }));
+
+    // Phase 2: Sequential Telegram sends (respect rate limits)
+    let sent = 0, failed = 0;
+    for (const result of userResults) {
+      if (!result) continue;
+      if ((result as any).error) { failed++; continue; }
+      try {
+        await sendMessage(result.chatId, result.msg!);
+        sent++;
+      } catch (err: any) {
+        console.error(`Failed to send weekly recap to chat ${result.chatId}:`, err.message);
+        failed++;
+      }
+    }
+
+    console.log(`Weekly recap done: sent to ${sent} users, ${failed} failed`);
+  });

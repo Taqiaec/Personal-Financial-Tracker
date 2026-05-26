@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinanceTracker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- AUTH SECTION -->
+    <div id="auth-section" class="auth-overlay">
+        <div class="auth-card">
+            <div class="auth-logo">
+                <div class="logo-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
+                </div>
+                <h1>FinanceTracker</h1>
+            </div>
+            <!-- Login Form -->
+            <form id="login-form" class="auth-form">
+                <h2>Masuk</h2>
+                <div class="form-group">
+                    <label for="login-email">Email</label>
+                    <input type="email" id="login-email" required placeholder="nama@email.com" autocomplete="email">
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Kata Sandi</label>
+                    <input type="password" id="login-password" required placeholder="Minimal 6 karakter" autocomplete="current-password">
+                </div>
+                <label class="remember-me">
+                    <input type="checkbox" id="remember-me" checked> Ingat Saya
+                </label>
+                <div class="auth-error" id="login-error" style="display:none;"></div>
+                <button type="submit" class="btn-primary">Masuk</button>
+                <p class="auth-switch">Belum punya akun? <button type="button" class="auth-link" id="show-signup">Daftar di sini</button></p>
+            </form>
+            <!-- Signup Form -->
+            <form id="signup-form" class="auth-form" style="display:none;">
+                <h2>Daftar Akun</h2>
+                <div class="form-group">
+                    <label for="signup-username">Nama Pengguna</label>
+                    <input type="text" id="signup-username" required placeholder="Nama Anda" autocomplete="name" maxlength="50">
+                </div>
+                <div class="form-group">
+                    <label for="signup-email">Email</label>
+                    <input type="email" id="signup-email" required placeholder="nama@email.com" autocomplete="email">
+                </div>
+                <div class="form-group">
+                    <label for="signup-password">Kata Sandi</label>
+                    <input type="password" id="signup-password" required placeholder="Minimal 6 karakter" minlength="6" autocomplete="new-password">
+                </div>
+                <div class="auth-error" id="signup-error" style="display:none;"></div>
+                <button type="submit" class="btn-primary">Daftar</button>
+                <p class="auth-switch">Sudah punya akun? <button type="button" class="auth-link" id="show-login">Masuk di sini</button></p>
+            </form>
+        </div>
+    </div>
+
+    <!-- APP CONTENT (hidden until authenticated) -->
+    <div id="app-content" style="display:none;">
+
+        <!-- Offline Banner -->
+        <div id="offline-banner" style="display:none;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.58 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+            Anda sedang offline. Data akan disinkronkan saat terhubung kembali.
+        </div>
+
+        <nav class="navbar">
+            <div class="container nav-container">
+                <div class="logo">
+                    <div class="logo-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
+                    </div>
+                    FinanceTracker
+                </div>
+                <button class="hamburger" id="hamburger" aria-label="Toggle menu">
+                    <span></span><span></span><span></span>
+                </button>
+                <div class="nav-menu" id="nav-menu">
+                <ul class="nav-links">
+                    <li><button class="nav-btn active" data-page="dashboard">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                        Dashboard
+                    </button></li>
+                    <li><button class="nav-btn" data-page="transactions">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                        Transaksi
+                    </button></li>
+                    <li><button class="nav-btn" data-page="accounts">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><path d="M7 14h.01M12 14h.01M17 14h.01"/></svg>
+                        Akun
+                    </button></li>
+                    <li><button class="nav-btn" data-page="budgets">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+                        Budget
+                    </button></li>
+                    <li><button class="nav-btn" data-page="add">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+                        Baru
+                    </button></li>
+                </ul>
+                <div class="nav-user">
+                    <span class="nav-username" id="nav-username"></span>
+                    <button class="nav-btn btn-logout" id="btn-logout" title="Keluar">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                        Keluar
+                    </button>
+                </div>
+                </div><!-- /nav-menu -->
+            </div>
+        </nav>
+
+        <main class="container">
+            <!-- DASHBOARD -->
+            <section id="page-dashboard" class="page active">
+                <div class="summary-cards">
+                    <div class="summary-card balance">
+                        <div class="card-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
+                        </div>
+                        <span class="card-label">Saldo</span>
+                        <span class="card-value" id="balance-display">Rp 0</span>
+                    </div>
+                    <div class="summary-card income">
+                        <div class="card-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+                        </div>
+                        <span class="card-label">Pemasukan</span>
+                        <span class="card-value" id="income-display">Rp 0</span>
+                    </div>
+                    <div class="summary-card expense">
+                        <div class="card-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/></svg>
+                        </div>
+                        <span class="card-label">Pengeluaran</span>
+                        <span class="card-value" id="expense-display">Rp 0</span>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <button type="button" class="btn-settings-toggle" id="btn-settings-toggle">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        Pengaturan
+                        <svg class="settings-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                    <div class="settings-body" id="settings-body">
+                        <div class="settings-item">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="17" width="20" height="4" rx="1"/><path d="M2 7h20M8 3h8"/></svg>
+                            <div class="settings-item-content">
+                                <label for="payday-start">Tanggal Gajian</label>
+                                <div class="settings-item-row">
+                                    <input type="number" id="payday-start" min="1" max="28" value="1" class="settings-input">
+                                    <span class="settings-hint">Awal bulan keuangan</span>
+                                </div>
+                                <button type="button" class="payday-toggle" id="payday-toggle">
+                                    <span>Pengecualian per Bulan</span>
+                                    <svg class="payday-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                                </button>
+                                <div class="payday-overrides-body" id="payday-overrides-body">
+                                    <div class="payday-overrides-section" id="payday-override-list"></div>
+                                    <div class="payday-override-add">
+                                        <input type="month" id="override-month" class="override-month-input">
+                                        <input type="number" id="override-day" min="1" max="28" placeholder="Tgl" class="override-day-input">
+                                        <button type="button" id="btn-add-override" class="btn-override-add">+</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="settings-item">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                            <div class="settings-item-content">
+                                <label>Telegram Bot</label>
+                                <div class="settings-item-row">
+                                    <button type="button" id="btn-telegram-link" class="btn-telegram-link">Generate Kode Link</button>
+                                    <span class="settings-hint" id="telegram-link-status">Hubungkan bot Telegram</span>
+                                </div>
+                                <div id="telegram-code-display" style="display:none; margin-top:8px;">
+                                    <span class="telegram-code-label">Kode kamu:</span>
+                                    <code class="telegram-code" id="telegram-code-text"></code>
+                                    <span class="telegram-code-hint">Kirim <code>/link [kode]</code> ke bot Telegram. Kode expired 10 menit.</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="charts-row">
+                    <div class="chart-card">
+                        <div class="chart-header">
+                            <h3>Pengeluaran per Kategori</h3>
+                            <select id="pie-month-select" class="chart-month-select"></select>
+                        </div>
+                        <canvas id="pieChart"></canvas>
+                        <p class="chart-empty" id="pie-empty">Belum ada data pengeluaran</p>
+                    </div>
+                    <div class="chart-card">
+                        <h3>Ringkasan Bulanan</h3>
+                        <canvas id="barChart"></canvas>
+                        <p class="chart-empty" id="bar-empty">Belum ada data transaksi</p>
+                    </div>
+                </div>
+
+                <div class="recent-section">
+                    <h3>Transaksi Terbaru</h3>
+                    <div id="recent-list"></div>
+                </div>
+                <div class="budget-progress-section" id="budget-progress-section" style="display:none;">
+                    <h3>Progress Budget</h3>
+                    <div id="budget-progress"></div>
+                </div>
+                <div class="budget-alerts" id="budget-alerts"></div>
+                <div class="portfolio-section" id="portfolio-section" style="display:none;">
+                    <h3>Portofolio Investasi</h3>
+                    <div class="portfolio-total" id="portfolio-total"></div>
+                    <div class="portfolio-list" id="portfolio-list"></div>
+                </div>
+            </section>
+
+            <!-- TRANSACTIONS -->
+            <section id="page-transactions" class="page">
+                <div class="filter-bar">
+                    <div class="filter-group">
+                        <label>Filter</label>
+                        <select id="filter-type">
+                            <option value="all">Semua Tipe</option>
+                            <option value="income">Pemasukan</option>
+                            <option value="expense">Pengeluaran</option>
+                            <option value="transfer">Transfer</option>
+                        </select>
+                        <select id="filter-category">
+                            <option value="all">Semua Kategori</option>
+                        </select>
+                        <select id="filter-month">
+                            <option value="all">Semua Bulan</option>
+                        </select>
+                    </div>
+                    <button class="btn-secondary" id="export-btn">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Export CSV
+                    </button>
+                </div>
+                <div id="transaction-list"></div>
+            </section>
+
+            <!-- ADD TRANSACTION -->
+            <section id="page-add" class="page">
+                <div class="form-card">
+                    <h2>Tambah Transaksi</h2>
+                    <form id="transaction-form">
+                        <!-- Scanner Section -->
+                        <div class="scanner-section" id="scanner-section">
+                            <button type="button" class="btn-scanner-toggle" id="btn-scanner-toggle">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                                Scan dari Gambar
+                            </button>
+                            <div class="scanner-body" id="scanner-body">
+                                <div class="upload-zone" id="upload-zone">
+                                    <input type="file" id="scanner-file" accept="image/*" capture="environment" hidden>
+                                    <div class="upload-icon">
+                                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                                    </div>
+                                    <p class="upload-text">Klik atau drag & drop gambar struk / transaksi di sini</p>
+                                    <p class="upload-hint">JPG, PNG, atau WebP. Maks 20MB. Bisa juga Ctrl+V paste.</p>
+                                </div>
+                                <div class="preview-area" id="preview-area" style="display:none;">
+                                    <img id="preview-image" alt="Preview">
+                                    <button type="button" class="btn-remove-image" id="btn-remove-image">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                        Hapus Gambar
+                                    </button>
+                                </div>
+                                <button type="button" class="btn-primary btn-parse" id="btn-parse" disabled>
+                                    <span class="btn-parse-text">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+                                        Parse Gambar
+                                    </span>
+                                    <span class="btn-parse-loading" style="display:none;">
+                                        <span class="spinner"></span>
+                                        Menganalisis...
+                                    </span>
+                                </button>
+                                <div class="parse-result" id="parse-result" style="display:none;">
+                                    <div class="parse-result-header">
+                                        <h4>Hasil Parsing</h4>
+                                        <span class="parse-confidence" id="parse-confidence"></span>
+                                    </div>
+                                    <div class="parse-fields" id="parse-fields"></div>
+                                    <div class="parse-actions">
+                                        <button type="button" class="btn-primary btn-apply" id="btn-apply">Isi Form</button>
+                                        <button type="button" class="btn-secondary btn-cancel-parse" id="btn-cancel-parse">Batal</button>
+                                    </div>
+                                </div>
+                                <div class="parse-error" id="parse-error" style="display:none;"></div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="desc">Deskripsi</label>
+                            <input type="text" id="desc" required placeholder="Contoh: Gaji bulan Mei">
+                        </div>
+                        <div class="form-group">
+                            <label for="amount">Jumlah (Rp)</label>
+                            <input type="number" id="amount" required min="1" placeholder="1000000">
+                        </div>
+                        <!-- Type Tabs -->
+                        <div class="type-tabs" id="type-tabs">
+                            <button type="button" class="type-tab active" data-type="expense">Pengeluaran</button>
+                            <button type="button" class="type-tab" data-type="income">Pemasukan</button>
+                            <button type="button" class="type-tab" data-type="transfer">Transfer</button>
+                        </div>
+
+                        <!-- Category (hidden for transfer) -->
+                        <div class="form-group" id="category-group">
+                            <label for="category">Kategori</label>
+                            <select id="category"></select>
+                        </div>
+
+                        <!-- Source Account -->
+                        <div class="form-group" id="source-account-group">
+                            <label for="tx-account" id="source-account-label">Akun</label>
+                            <select id="tx-account" required>
+                                <option value="">-- Pilih Akun --</option>
+                            </select>
+                        </div>
+
+                        <!-- Destination Account (transfer only) -->
+                        <div class="form-group" id="transfer-to-group" style="display:none;">
+                            <label for="tx-transfer-to-account">Akun Tujuan</label>
+                            <select id="tx-transfer-to-account">
+                                <option value="">-- Pilih Akun Tujuan --</option>
+                            </select>
+                        </div>
+
+                        <!-- Admin Fee (transfer only) -->
+                        <div class="admin-fee-row" id="admin-fee-row" style="display:none;">
+                            <span class="fee-label">Biaya Admin (opsional): Rp</span>
+                            <input type="number" id="tx-admin-fee" min="0" placeholder="0" value="0">
+                        </div>
+                        <div class="form-group">
+                            <label for="date">Tanggal</label>
+                            <input type="date" id="date">
+                        </div>
+                        <input type="hidden" id="edit-tx-id">
+                        <div id="form-actions" style="display:flex;gap:8px;">
+                            <button type="submit" class="btn-primary" id="submit-tx-btn" style="flex:1;">Simpan Transaksi</button>
+                            <button type="button" class="btn-secondary" id="btn-cancel-edit" style="display:none;">Batal</button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+            <!-- ACCOUNTS -->
+            <section id="page-accounts" class="page">
+                <div class="section-header">
+                    <h2>Akun Bank</h2>
+                    <button class="btn-primary btn-add-account" id="btn-add-account">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+                        Tambah Akun
+                    </button>
+                </div>
+                <div class="accounts-total" id="accounts-total" style="display:none;">
+                    <span class="total-label">Total Saldo Semua Akun</span>
+                    <span class="total-value" id="accounts-total-value">Rp 0</span>
+                </div>
+                <div class="accounts-grid" id="accounts-grid"></div>
+                <div class="subtype-section" id="subtype-settings">
+                    <div class="subtype-header" id="subtype-toggle">
+                        <h3>Kelola Sub Tipe Akun</h3>
+                        <svg class="subtype-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                    <div class="subtype-body" id="subtype-body">
+                        <div id="subtype-content"></div>
+                        <button class="btn-primary" id="btn-save-subtypes" style="margin-top:16px;">Simpan Sub Tipe</button>
+                    </div>
+                </div>
+            </section>
+            <!-- BUDGETS -->
+            <section id="page-budgets" class="page">
+                <div class="form-card">
+                    <h2>Budget Bulanan</h2>
+                    <p class="form-hint">Set budget per kategori pengeluaran. Alert muncul di dashboard kalau mendekati limit.</p>
+                    <div id="budget-list"></div>
+                    <button class="btn-primary" id="btn-save-budget" style="margin-top:16px;">Simpan Budget</button>
+                </div>
+            </section>
+        </main>
+
+        <!-- Investment Adjustment Modal -->
+        <div class="modal-overlay" id="adjustment-modal">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3 id="adjustment-modal-title">Sesuaikan Saldo Investasi</h3>
+                    <button class="modal-close" id="adjustment-modal-close">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
+                <form id="adjustment-form">
+                    <input type="hidden" id="adj-account-id">
+                    <div class="form-group">
+                        <label for="adj-current-balance">Saldo Saat Ini (Rp)</label>
+                        <input type="text" id="adj-current-balance" disabled class="readonly-input">
+                    </div>
+                    <div class="form-group">
+                        <label for="adj-new-balance">Saldo Baru (Rp)</label>
+                        <input type="number" id="adj-new-balance" required min="0" placeholder="Masukkan nilai terkini">
+                    </div>
+                    <div class="form-group">
+                        <label for="adj-date">Tanggal Penyesuaian</label>
+                        <input type="date" id="adj-date">
+                    </div>
+                    <div class="adjustment-preview" id="adj-preview" style="display:none;"></div>
+                    <button type="submit" class="btn-primary" id="adj-submit-btn">Simpan Penyesuaian</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Account Form Modal -->
+        <div class="modal-overlay" id="account-modal">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3 id="modal-title">Tambah Akun</h3>
+                    <button class="modal-close" id="modal-close">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
+                <form id="account-form">
+                    <input type="hidden" id="acc-id">
+                    <div class="form-group">
+                        <label for="acc-bank">Nama Bank / Akun</label>
+                        <input type="text" id="acc-bank" required placeholder="Contoh: BCA, Mandiri, GoPay">
+                    </div>
+                    <div class="form-group">
+                        <label for="acc-type">Tipe Akun</label>
+                        <select id="acc-type">
+                            <option value="passive">Pasif (Rekening Bank)</option>
+                            <option value="investment">Investasi</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="acc-subtype">Sub Tipe</label>
+                        <select id="acc-subtype">
+                            <option value="">-- Pilih Sub Tipe --</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="acc-balance">Saldo Awal (Rp)</label>
+                        <input type="number" id="acc-balance" required min="0" placeholder="0" value="0">
+                    </div>
+                    <button type="submit" class="btn-primary" id="modal-submit-btn">Simpan Akun</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-functions-compat.js"></script>
+
+    <!-- App scripts (order matters) -->
+    <script src="firebase-config.js"></script>
+    <script src="auth.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
