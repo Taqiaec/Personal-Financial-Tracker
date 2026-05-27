@@ -98,6 +98,10 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
                         Budget
                     </button></li>
+                    <li><button class="nav-btn" data-page="debts">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                        Hutang
+                    </button></li>
                     <li><button class="nav-btn" data-page="add">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
                         Baru
@@ -213,6 +217,22 @@
                     <div id="budget-progress"></div>
                 </div>
                 <div class="budget-alerts" id="budget-alerts"></div>
+                <div class="debt-summary-section" id="debt-summary-section" style="display:none;">
+                    <div class="debt-dash-header">
+                        <h3>Hutang & Piutang</h3>
+                        <span class="debt-dash-net" id="dash-debt-net">Rp 0</span>
+                    </div>
+                    <div class="debt-dash-row">
+                        <div class="debt-dash-item hutang">
+                            <span>Hutang</span>
+                            <span class="debt-dash-val" id="dash-hutang-val">Rp 0</span>
+                        </div>
+                        <div class="debt-dash-item piutang">
+                            <span>Piutang</span>
+                            <span class="debt-dash-val" id="dash-piutang-val">Rp 0</span>
+                        </div>
+                    </div>
+                </div>
                 <div class="portfolio-section" id="portfolio-section" style="display:none;">
                     <h3>Portofolio Investasi</h3>
                     <div class="portfolio-total" id="portfolio-total"></div>
@@ -339,6 +359,43 @@
                             <span class="fee-label">Biaya Admin (opsional): Rp</span>
                             <input type="number" id="tx-admin-fee" min="0" placeholder="0" value="0">
                         </div>
+                        <!-- Split Bill Section -->
+                        <div class="split-bill-section" id="split-bill-section" style="display:none;">
+                            <label class="split-toggle-label">
+                                <input type="checkbox" id="split-bill-enabled">
+                                <span>Split Bill (Patungan)</span>
+                            </label>
+                            <span class="split-hint">Kamu bayarin total, tagih temen-temen</span>
+                            <div class="split-bill-body" id="split-bill-body" style="display:none;">
+                                <div class="split-mode-select">
+                                    <label><input type="radio" name="split-mode" value="equal" checked> <span>Rata (Equal Split)</span></label>
+                                    <label><input type="radio" name="split-mode" value="custom"> <span>Custom</span></label>
+                                </div>
+                                <div class="split-equal-row" id="split-equal-row">
+                                    <div class="form-group">
+                                        <label>Total Orang (termasuk kamu)</label>
+                                        <input type="number" id="split-total-people" min="2" placeholder="4">
+                                    </div>
+                                    <div class="split-summary" id="split-equal-summary">
+                                        <span>Per orang: <strong id="split-per-person">Rp 0</strong></span>
+                                        <span>Bagian kamu: <strong id="split-your-share-eq">Rp 0</strong></span>
+                                        <span>Total piutang: <strong id="split-total-piutang-eq">Rp 0</strong></span>
+                                    </div>
+                                </div>
+                                <div class="split-custom-row" id="split-custom-row" style="display:none;">
+                                    <div class="split-participants-header">
+                                        <span>Temen yang ikut patungan</span>
+                                        <button type="button" class="btn-add-participant" id="btn-add-participant">+ Tambah Orang</button>
+                                    </div>
+                                    <div class="split-participants-list" id="split-participants-list"></div>
+                                    <div class="split-custom-summary" id="split-custom-summary">
+                                        <span>Total: <strong>Rp <span id="split-total-amount">0</span></strong></span>
+                                        <span>Bagian temen: <strong>Rp <span id="split-friends-total">0</span></strong></span>
+                                        <span>Bagian kamu: <strong>Rp <span id="split-your-share-custom">0</span></strong></span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                         <div class="form-group">
                             <label for="date">Tanggal</label>
                             <input type="date" id="date">
@@ -360,11 +417,33 @@
                         Tambah Akun
                     </button>
                 </div>
-                <div class="accounts-total" id="accounts-total" style="display:none;">
-                    <span class="total-label">Total Saldo Semua Akun</span>
-                    <span class="total-value" id="accounts-total-value">Rp 0</span>
+                <div class="accounts-total-row" id="accounts-total-row" style="display:none;">
+                    <div class="accounts-total" id="accounts-total-before">
+                        <span class="total-label">Total Saldo (Sebelum Hutang)</span>
+                        <span class="total-value" id="accounts-total-value">Rp 0</span>
+                    </div>
+                    <div class="accounts-total" id="accounts-total-after">
+                        <span class="total-label">Total Saldo (Setelah Hutang)</span>
+                        <span class="total-value" id="accounts-total-after-value">Rp 0</span>
+                    </div>
                 </div>
                 <div class="accounts-grid" id="accounts-grid"></div>
+                <div class="debt-summary-section" id="accounts-debt-section" style="display:none;">
+                    <div class="debt-dash-header">
+                        <h3>Hutang & Piutang</h3>
+                        <span class="debt-dash-net" id="acc-debt-net-val">Rp 0</span>
+                    </div>
+                    <div class="debt-dash-row">
+                        <div class="debt-dash-item hutang">
+                            <span>Hutang</span>
+                            <span class="debt-dash-val" id="acc-hutang-val">Rp 0</span>
+                        </div>
+                        <div class="debt-dash-item piutang">
+                            <span>Piutang</span>
+                            <span class="debt-dash-val" id="acc-piutang-val">Rp 0</span>
+                        </div>
+                    </div>
+                </div>
                 <div class="subtype-section" id="subtype-settings">
                     <div class="subtype-header" id="subtype-toggle">
                         <h3>Kelola Sub Tipe Akun</h3>
@@ -384,6 +463,48 @@
                     <div id="budget-list"></div>
                     <button class="btn-primary" id="btn-save-budget" style="margin-top:16px;">Simpan Budget</button>
                 </div>
+            </section>
+            <!-- DEBTS -->
+            <section id="page-debts" class="page">
+                <div class="section-header">
+                    <h2>Hutang & Piutang</h2>
+                    <button class="btn-primary btn-add-account" id="btn-add-debt">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+                        Tambah
+                    </button>
+                </div>
+                <div class="debt-summary-row" id="debt-summary-detail">
+                    <div class="debt-summary-card hutang">
+                        <span class="debt-summary-label">Total Hutang</span>
+                        <span class="debt-summary-value" id="debt-hutang-display">Rp 0</span>
+                    </div>
+                    <div class="debt-summary-card piutang">
+                        <span class="debt-summary-label">Total Piutang</span>
+                        <span class="debt-summary-value" id="debt-piutang-display">Rp 0</span>
+                    </div>
+                    <div class="debt-summary-card net">
+                        <span class="debt-summary-label">Posisi Bersih</span>
+                        <span class="debt-summary-value" id="debt-net-display">Rp 0</span>
+                    </div>
+                </div>
+                <div class="filter-bar">
+                    <div class="filter-group">
+                        <label>Filter</label>
+                        <select id="debt-filter-type">
+                            <option value="all">Semua Tipe</option>
+                            <option value="hutang">Hutang</option>
+                            <option value="piutang">Piutang</option>
+                        </select>
+                        <select id="debt-filter-status">
+                            <option value="active" selected>Aktif</option>
+                            <option value="all">Semua Status</option>
+                            <option value="pending">Belum Dibayar</option>
+                            <option value="partial">Cicilan</option>
+                            <option value="paid">Lunas</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="debt-list"></div>
             </section>
         </main>
 
@@ -449,6 +570,86 @@
                         <input type="number" id="acc-balance" required min="0" placeholder="0" value="0">
                     </div>
                     <button type="submit" class="btn-primary" id="modal-submit-btn">Simpan Akun</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Debt Form Modal -->
+        <div class="modal-overlay" id="debt-modal">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3 id="debt-modal-title">Tambah Hutang/Piutang</h3>
+                    <button class="modal-close" id="debt-modal-close">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
+                <form id="debt-form">
+                    <input type="hidden" id="debt-id">
+                    <div class="form-group">
+                        <label for="debt-type">Tipe</label>
+                        <select id="debt-type" required>
+                            <option value="hutang">Hutang (Saya berhutang)</option>
+                            <option value="piutang">Piutang (Saya memberi hutang)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="debt-person">Nama Orang</label>
+                        <input type="text" id="debt-person" required placeholder="Nama orang (bebas)">
+                    </div>
+                    <div class="form-group">
+                        <label for="debt-amount">Jumlah (Rp)</label>
+                        <input type="number" id="debt-amount" required min="1" placeholder="1000000">
+                    </div>
+                    <div class="form-group">
+                        <label for="debt-desc">Deskripsi (opsional)</label>
+                        <input type="text" id="debt-desc" placeholder="Contoh: Pinjam buat bayar SPP">
+                    </div>
+                    <div class="form-group">
+                        <label for="debt-date">Tanggal</label>
+                        <input type="date" id="debt-date">
+                    </div>
+                    <div class="form-group">
+                        <label for="debt-account">Akun Terkait (opsional)</label>
+                        <select id="debt-account">
+                            <option value="">-- Pilih Akun --</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn-primary" id="debt-submit-btn">Simpan</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Debt Payment Modal -->
+        <div class="modal-overlay" id="payment-modal">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3 id="payment-modal-title">Catat Pembayaran</h3>
+                    <button class="modal-close" id="payment-modal-close">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
+                <form id="payment-form">
+                    <input type="hidden" id="payment-debt-id">
+                    <div class="form-group">
+                        <label for="payment-amount">Jumlah Pembayaran (Rp)</label>
+                        <input type="number" id="payment-amount" required min="1" placeholder="500000">
+                    </div>
+                    <div id="payment-info" class="debt-payment-info"></div>
+                    <div class="form-group">
+                        <label for="payment-date">Tanggal</label>
+                        <input type="date" id="payment-date">
+                    </div>
+                    <div class="form-group">
+                        <label for="payment-account">Akun</label>
+                        <select id="payment-account">
+                            <option value="">-- Pilih Akun --</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="payment-note">Catatan (opsional)</label>
+                        <input type="text" id="payment-note" placeholder="Contoh: Transfer via BCA">
+                    </div>
+                    <button type="submit" class="btn-primary">Simpan Pembayaran</button>
                 </form>
             </div>
         </div>

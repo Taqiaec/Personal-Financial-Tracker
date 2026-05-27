@@ -22,7 +22,22 @@ Kelola akun bank, e-wallet, dan investasi. Dua tipe akun:
 - **Pasif** — rekening bank, e-wallet (saldo = saldo awal + net transaksi)
 - **Investasi** — reksadana, emas, saham (saldo = nilai terkini, bisa disesuaikan manual)
 
-Transaksi tanpa akun tetap dihitung di total saldo dashboard.
+Transaksi tanpa akun tetap dihitung di total saldo dashboard. Halaman Akun menampilkan **dua total saldo**: Sebelum Hutang (saldo bersih akun) dan Setelah Hutang (saldo + piutang − hutang), plus ringkasan hutang/piutang.
+
+### Hutang & Piutang
+Catat hutang (kamu berutang ke orang lain) dan piutang (orang lain berutang ke kamu). Fitur:
+- **Filter status**: Aktif (belum lunas) / Sebagian / Lunas
+- **Pembayaran cicilan**: Catat pembayaran sebagian dengan akun dan catatan
+- **Ledger otomatis**: Setiap pembayaran tercatat sebagai transaksi (piutang → pemasukan, hutang → pengeluaran) — jadi transaksi berfungsi sebagai mutasi lengkap
+- **Default tampil aktif**: Hutang/piutang yang sudah lunas otomatis disembunyikan
+- **Dashboard ringkasan**: Ringkasan hutang/piutang tampil di dashboard dan halaman Akun
+
+### Split Bill (Patungan)
+Bayarin grup? Catat bagian kamu sebagai pengeluaran, bagian teman sebagai piutang:
+- **Equal**: Total ÷ jumlah orang, otomatis hitung per orang
+- **Custom**: Nama + nominal per teman, bagian kamu = total − share teman
+- **AI detection**: Bot Telegram + AI Scanner bisa deteksi patungan dari caption/keyword (patungan, split bill, bareng, bagi rata, iuran, urunan)
+- **Atomic write**: Expense + piutang ditulis dalam satu transaksi — gak bakal ke-record setengah-setengah
 
 ### Budget
 Set budget per kategori pengeluaran. Dashboard akan menampilkan progress bar (biru <80%, kuning 80-99%, merah 100%+) dan alert otomatis.
@@ -48,7 +63,7 @@ Bot [@Fintracker_Takii_Bot](https://t.me/Fintracker_Takii_Bot) — catat transak
 | `/akun` | Daftar akun terhubung |
 | `/transfer 100000 BCA ke Mandiri` | Transfer dana antar akun |
 
-Bisa juga chat bebas: `"makan siang 50rb"`, `"goceng mie ayam"`, `"transfer 100rb bca ke mandiri"` — AI akan parsing otomatis.
+Bisa juga chat bebas: `"makan siang 50rb"`, `"goceng mie ayam"`, `"transfer 100rb bca ke mandiri"`, `"nitip abang beliin susu 50rb"` (hutang), `"bayarin temen makan 100rb"` (piutang), `"patungan nasgor 4 orang 100rb"` (split bill) — AI akan parsing otomatis.
 
 Bot kirim recap otomatis: harian + mingguan tiap jam 9 malam WIB.
 
@@ -77,7 +92,7 @@ Kirim pesan bebas atau command. Contoh:
 makan siang nasi padang 45rb
 transfer 100rb bca ke gopay
 ```
-Bot akan parsing dan menyimpan transaksi otomatis.
+Bot akan parsing dan menyimpan transaksi otomatis. Bot juga mendeteksi hutang/piutang dan split bill (patungan) dari chat bebas maupun caption foto.
 
 ---
 

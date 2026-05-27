@@ -1,6 +1,6 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
-import { handleStart, handleHelp, handleLink, handleSaldo, handleTambah, handleBulanIni, handleAkun, handlePhoto, handleFreeText, handleStatistik, handleBanding, handleTransfer } from './commands';
+import { handleStart, handleHelp, handleLink, handleSaldo, handleTambah, handleBulanIni, handleAkun, handlePhoto, handleFreeText, handleStatistik, handleBanding, handleTransfer, handleHutang, handlePiutang, handleBayar } from './commands';
 import { sendMessage } from './telegram';
 export { callGemini } from './gemini';
 export { dailyRecap, weeklyRecap } from './scheduler';
@@ -78,6 +78,12 @@ export const telegramWebhook = functions
         await handleTambah(chatId, text, 'income');
       } else if (text.startsWith('/transfer')) {
         await handleTransfer(chatId, text);
+      } else if (text === '/hutang') {
+        await handleHutang(chatId);
+      } else if (text === '/piutang') {
+        await handlePiutang(chatId);
+      } else if (text.startsWith('/bayar')) {
+        await handleBayar(chatId, text);
       } else if (text.startsWith('/')) {
         await sendMessage(chatId,
           '❓ Command tidak dikenal.\n\n' +

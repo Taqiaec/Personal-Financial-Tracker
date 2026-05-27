@@ -83,7 +83,7 @@ export function buildScanPrompt(accountNames: string[]): string {
     ? accountNames.map(n => `"${n}"`).join(', ')
     : '(belum ada akun)';
 
-  return 'Anda adalah parser data transaksi keuangan Indonesia. Tugas Anda: membaca gambar struk/nota/screenshot transaksi dan mengembalikan JSON yang akurat.\n\nSEBELUM menulis JSON, pikirkan dulu:\n1. Transaksi ini untuk apa sebenarnya? (bukan apa yang tertulis literal di struk)\n2. Kategori apa yang paling tepat berdasarkan TUJUAN transaksi?\n\nKategori Pengeluaran (expense):\n- Makanan: restoran, warteg, delivery food (GoFood/GrabFood), kopi, catering, jajanan\n- Tagihan: listrik (PLN), air (PDAM), internet, pulsa/paket data, sewa, iuran, cicilan\n- Transportasi: ojek online (Gojek/Grab), taksi, bus, KRL, MRT, BBM, tol, parkir, top-up e-toll, servis kendaraan\n- Belanja: retail (Indomaret/Alfamart/Superindo), online shopping (Shopee/Tokopedia), fashion, elektronik, perlengkapan rumah\n- Zakat & Donasi: zakat, infak, sedekah, sumbangan, donasi sosial\n- Kesehatan: dokter, rumah sakit, obat/apotek, BPJS/asuransi kesehatan, optik\n- Hiburan & Hobi: bioskop, streaming (Netflix/Spotify), game, konser, wisata, hobi, langganan digital\n- Lainnya: hanya jika benar-benar tidak cocok dengan kategori di atas\n\nKategori Pemasukan (income):\n- Gaji: gaji bulanan, THR, bonus dari kantor\n- Freelance: proyek lepas, upah harian, komisi\n- Investasi: dividen, return saham/reksadana, capital gain\n- Bisnis: hasil jualan, pendapatan usaha\n- Hadiah: uang pemberian, hadiah lomba\n- Lainnya: pemasukan yang tidak masuk kategori di atas\n\nAturan description:\n- Normalisasi deskripsi, jangan salin mentah teks dari gambar\n- Buang kata status: "berhasil", "sukses", "successful", "transaction approved"\n- Standarisasi istilah: "top up"/"topup"/"isi ulang" → "Isi Ulang"\n- Format: [Jenis Transaksi] [Nama Merchant/Layanan] (maks 5 kata, bahasa Indonesia)\n\nAturan amount:\n- Angka saja, tanpa Rp, tanpa titik, tanpa koma (contoh: 50000 bukan "Rp 50.000")\n- Jika terdeteksi refund/pengembalian, tetap tulis nominal positif, sesuaikan type\n\nAturan date:\n- Format YYYY-MM-DD, ambil dari tanggal transaksi di gambar\n- Jika tidak ada tanggal, gunakan hari ini\n\nAturan accountHint:\n- Tulis nama bank/e-wallet yang terlihat di gambar (contoh: "BCA", "GoPay", "OVO", "ShopeePay")\n- Akun pengguna yang tersedia: ' + accountList + '\n- Jika tidak jelas, kosongkan string\n\nContoh parsing yang benar:\n\n1. Screenshot top-up Flazz Rp 100.000 lewat BCA Mobile\n→ {"description": "Isi Ulang Flazz", "amount": 100000, "type": "expense", "category": "Transportasi", "date": "2026-05-24", "accountHint": "BCA"}\n\n2. Nota GoFood dari resto Sate Taichan Rp 45.000\n→ {"description": "GoFood Sate Taichan", "amount": 45000, "type": "expense", "category": "Makanan", "date": "2026-05-24", "accountHint": "GoPay"}\n\n3. Slip gaji diterima Rp 8.500.000 transfer dari perusahaan\n→ {"description": "Gaji Bulanan", "amount": 8500000, "type": "income", "category": "Gaji", "date": "2026-05-24", "accountHint": "BCA"}\n\n4. Struk SPBU Pertamina isi bensin Rp 200.000\n→ {"description": "BBM Pertamina", "amount": 200000, "type": "expense", "category": "Transportasi", "date": "2026-05-24", "accountHint": ""}\n\nTransfer detection dari caption:\n- Jika caption pengguna menyebutkan transfer/pindah dana (contoh: "transfer dana bca ke mandiri", "pindahin gopay ke ovo"):\n  - type = "transfer"\n  - accountHint = akun asal\n  - destAccountHint = akun tujuan\n  - category = ""\n  - adminFee = biaya admin jika disebutkan, 0 jika tidak\n  - JANGAN gunakan akun yang sama untuk asal dan tujuan\n\nKembalikan HANYA JSON valid tanpa teks pembuka, penutup, atau markdown:\n{\n  "description": "...",\n  "amount": ...,\n  "type": "...",\n  "category": "...",\n  "date": "YYYY-MM-DD",\n  "accountHint": "...",\n  "destAccountHint": "...",\n  "adminFee": 0\n}';
+  return 'Anda adalah parser data transaksi keuangan Indonesia. Tugas Anda: membaca gambar struk/nota/screenshot transaksi dan mengembalikan JSON yang akurat.\n\nSEBELUM menulis JSON, pikirkan dulu:\n1. Transaksi ini untuk apa sebenarnya? (bukan apa yang tertulis literal di struk)\n2. Kategori apa yang paling tepat berdasarkan TUJUAN transaksi?\n\nKategori Pengeluaran (expense):\n- Makanan: restoran, warteg, delivery food (GoFood/GrabFood), kopi, catering, jajanan\n- Tagihan: listrik (PLN), air (PDAM), internet, pulsa/paket data, sewa, iuran, cicilan\n- Transportasi: ojek online (Gojek/Grab), taksi, bus, KRL, MRT, BBM, tol, parkir, top-up e-toll, servis kendaraan\n- Belanja: retail (Indomaret/Alfamart/Superindo), online shopping (Shopee/Tokopedia), fashion, elektronik, perlengkapan rumah\n- Zakat & Donasi: zakat, infak, sedekah, sumbangan, donasi sosial\n- Kesehatan: dokter, rumah sakit, obat/apotek, BPJS/asuransi kesehatan, optik\n- Hiburan & Hobi: bioskop, streaming (Netflix/Spotify), game, konser, wisata, hobi, langganan digital\n- Lainnya: hanya jika benar-benar tidak cocok dengan kategori di atas\n\nKategori Pemasukan (income):\n- Gaji: gaji bulanan, THR, bonus dari kantor\n- Freelance: proyek lepas, upah harian, komisi\n- Investasi: dividen, return saham/reksadana, capital gain\n- Bisnis: hasil jualan, pendapatan usaha\n- Hadiah: uang pemberian, hadiah lomba\n- Lainnya: pemasukan yang tidak masuk kategori di atas\n\nAturan description:\n- Normalisasi deskripsi, jangan salin mentah teks dari gambar\n- Buang kata status: "berhasil", "sukses", "successful", "transaction approved"\n- Standarisasi istilah: "top up"/"topup"/"isi ulang" → "Isi Ulang"\n- Format: [Jenis Transaksi] [Nama Merchant/Layanan] (maks 5 kata, bahasa Indonesia)\n\nAturan amount:\n- Angka saja, tanpa Rp, tanpa titik, tanpa koma (contoh: 50000 bukan "Rp 50.000")\n- Jika terdeteksi refund/pengembalian, tetap tulis nominal positif, sesuaikan type\n\nAturan date:\n- Format YYYY-MM-DD, ambil dari tanggal transaksi di gambar\n- Jika tidak ada tanggal, gunakan hari ini\n\nAturan accountHint:\n- Tulis nama bank/e-wallet yang terlihat di gambar (contoh: "BCA", "GoPay", "OVO", "ShopeePay")\n- Akun pengguna yang tersedia: ' + accountList + '\n- Jika tidak jelas, kosongkan string\n\nContoh parsing yang benar:\n\n1. Screenshot top-up Flazz Rp 100.000 lewat BCA Mobile\n→ {"description": "Isi Ulang Flazz", "amount": 100000, "type": "expense", "category": "Transportasi", "date": "2026-05-24", "accountHint": "BCA"}\n\n2. Nota GoFood dari resto Sate Taichan Rp 45.000\n→ {"description": "GoFood Sate Taichan", "amount": 45000, "type": "expense", "category": "Makanan", "date": "2026-05-24", "accountHint": "GoPay"}\n\n3. Slip gaji diterima Rp 8.500.000 transfer dari perusahaan\n→ {"description": "Gaji Bulanan", "amount": 8500000, "type": "income", "category": "Gaji", "date": "2026-05-24", "accountHint": "BCA"}\n\n4. Struk SPBU Pertamina isi bensin Rp 200.000\n→ {"description": "BBM Pertamina", "amount": 200000, "type": "expense", "category": "Transportasi", "date": "2026-05-24", "accountHint": ""}\n\nTransfer detection dari caption:\n- Jika caption pengguna menyebutkan transfer/pindah dana (contoh: "transfer dana bca ke mandiri", "pindahin gopay ke ovo"):\n  - type = "transfer"\n  - accountHint = akun asal\n  - destAccountHint = akun tujuan\n  - category = ""\n  - adminFee = biaya admin jika disebutkan, 0 jika tidak\n  - JANGAN gunakan akun yang sama untuk asal dan tujuan\n\nHutang/Piutang detection dari caption:\n- Jika caption menyebutkan orang lain yang TERLIBAT dalam transaksi, deteksi sebagai hutang atau piutang:\n- HUTANG (kamu yang berutang ke orang lain — orang lain yang bayarin duluan):\n  - Kata kunci: "dibeliin", "ditraktir", "nitip", "ditalangin", "utang", "ngutang", "hutang", "minjem duit", "pinjem dulu", "dibayarin dulu"\n  - Contoh caption: "nitip abang beliin susu di alfamart" + struk Alfamart → debtType: "hutang", debtPerson: "abang"\n- PIUTANG (orang lain berutang ke kamu — kamu yang bayarin duluan):\n  - Kata kunci: "bayarin", "nraktir", "talangin", "utangin", "ngutangin", "minjemin", "pinjemin", "gue bayarin", "aku bayarin"\n  - Contoh caption: "bayarin temen makan" + struk restoran → debtType: "piutang", debtPerson: "temen"\n- Jika caption ADA kata kunci hutang/piutang:\n  - Isi debtType: "hutang" atau "piutang"\n  - Isi debtPerson: nama orang yang terlibat (tanpa gelar/sebutan, satu kata)\n  - type tetap "expense" (karena duit tetap keluar dari akun)\n- Jika TIDAK ADA kata kunci hutang/piutang → debtType: "", debtPerson: ""\n\nSplit Bill (Patungan) detection dari caption:\n- Jika caption menyebutkan patungan/split bill:\n  - Kata kunci: "patungan", "split bill", "split", "bareng", "bagi rata", "iuran", "urunan"\n  - Equal mode (rata): "patungan nasgor 4 orang 100rb" → splitBill: { mode: "equal", totalPeople: 4 }\n  - Custom mode (beda nominal): "split bill bakso andi 30k budi 25k" → splitBill: { mode: "custom", participants: [{ person: "andi", amount: 30000 }, { person: "budi", amount: 25000 }] }\n  - amount di JSON tetap total amount, bukan user share\n- Jika TIDAK ADA kata kunci split bill → "splitBill": null\n\nPENTING: splitBill dan debtType/debtPerson bersifat MUTUALLY EXCLUSIVE. Jika split bill terdeteksi, set debtType = "" dan debtPerson = "". Jika hutang/piutang terdeteksi, set splitBill = null.\n\nKembalikan HANYA JSON valid tanpa teks pembuka, penutup, atau markdown:\n{\n  "description": "...",\n  "amount": ...,\n  "type": "...",\n  "category": "...",\n  "date": "YYYY-MM-DD",\n  "accountHint": "...",\n  "destAccountHint": "...",\n  "adminFee": 0,\n  "debtType": "",\n  "debtPerson": "",\n  "splitBill": null\n}';
 }
 
 export function buildNaturalLanguagePrompt(
@@ -134,6 +134,33 @@ export function buildNaturalLanguagePrompt(
     '   - category = "" (string kosong, transfer tidak punya kategori)\n' +
     '   - adminFee = biaya admin (angka saja, 0 jika tidak disebutkan)\n' +
     '   - Transfer TIDAK BOLEH menggunakan akun yang sama untuk asal dan tujuan\n\n' +
+    '4b-bis. SPLIT BILL / PATUNGAN:\n' +
+    '   Deteksi jika transaksi adalah patungan/split bill (kamu bayarin grup, temen ganti ke kamu):\n' +
+    '   - Kata kunci: "patungan", "split bill", "split", "bareng", "bagi rata", "iuran", "urunan"\n' +
+    '   - EQUAL (rata, semua orang bayar jumlah sama):\n' +
+    '     Contoh: "patungan nasgor 4 orang 100rb" → total 4 orang (termasuk kamu), masing-masing 25rb\n' +
+    '     splitBill: { mode: "equal", totalPeople: 4 }\n' +
+    '   - CUSTOM (beda nominal per orang):\n' +
+    '     Contoh: "split bill bakso andi 30k budi 25k" → andi dan budi temen kamu\n' +
+    '     splitBill: { mode: "custom", participants: [{ person: "andi", amount: 30000 }, { person: "budi", amount: 25000 }] }\n' +
+    '   - amount di JSON = TOTAL yang kamu bayarkan (bukan user share)\n' +
+    '   - expense yang dicatat = user share saja (total - temen share), piutang temen otomatis dibuat\n' +
+    '   - Jika TIDAK terdeteksi split bill → "splitBill": null\n\n' +
+    '4b. HUTANG / PIUTANG:\n' +
+    '   Deteksi jika transaksi melibatkan ORANG LAIN (bukan transfer antar akun sendiri):\n' +
+    '   - HUTANG (kamu yang berutang ke orang lain — orang lain yang bayarin duluan):\n' +
+    '     Kata kunci: "dibeliin", "ditraktir", "nitip", "ditalangin", "dibayarin dulu",\n' +
+    '     "utang", "ngutang", "hutang", "minjem duit", "pinjem dulu", "beliin"\n' +
+    '     Contoh: "nitip abang beliin susu di alfamart 50rb" → hutang ke abang\n' +
+    '   - PIUTANG (orang lain berutang ke kamu — kamu yang bayarin duluan):\n' +
+    '     Kata kunci: "bayarin", "nraktir", "talangin", "utangin", "ngutangin",\n' +
+    '     "minjemin", "pinjemin", "gue bayarin", "aku bayarin"\n' +
+    '     Contoh: "bayarin temen makan 100rb" → piutang ke temen\n' +
+    '   - Jika terdeteksi hutang/piutang:\n' +
+    '     debtType = "hutang" atau "piutang"\n' +
+    '     debtPerson = nama orang yang terlibat (tanpa gelar/sebutan, satu kata)\n' +
+    '     type = "expense" (karena duit tetap keluar dari akun)\n' +
+    '   - Jika TIDAK terdeteksi hutang/piutang → debtType = "", debtPerson = ""\n\n' +
     '5. AKUN:\n' +
     '   - accountHint: cocokkan dengan daftar akun di atas (case-insensitive, substring)\n' +
     '   - "cash"/"tunai"→akun yang mengandung "cash", "bca"→akun yang mengandung "BCA", dll\n' +
@@ -151,11 +178,17 @@ export function buildNaturalLanguagePrompt(
     '  "date": "' + today + '",\n' +
     '  "accountHint": "Cash",\n' +
     '  "destAccountHint": "",\n' +
-    '  "adminFee": 0\n' +
+    '  "adminFee": 0,\n' +
+    '  "debtType": "",\n' +
+    '  "debtPerson": "",\n' +
+    '  "splitBill": null\n' +
     '}\n\n' +
     'CATATAN:\n' +
     '- destAccountHint dan adminFee hanya diisi jika type = "transfer"\n' +
-    '- Untuk type "expense" dan "income", isi destAccountHint = "" dan adminFee = 0\n\n' +
+    '- debtType dan debtPerson hanya diisi jika terdeteksi hutang/piutang\n' +
+    '- splitBill hanya diisi jika terdeteksi patungan/split bill, isi null untuk transaksi biasa\n' +
+    '- splitBill dan debtType/debtPerson bersifat MUTUALLY EXCLUSIVE. Jika split bill terdeteksi, set debtType = "" dan debtPerson = "". Jika hutang/piutang terdeteksi, set splitBill = null.\n' +
+    '- Untuk transaksi biasa, isi destAccountHint = "", adminFee = 0, debtType = "", debtPerson = "", splitBill = null\n\n' +
     'CONTOH PARSING YANG BENAR:\n\n' +
     'Input: "nasgor goceng cash"\n' +
     '→ {"description": "Nasi Goreng", "amount": 5000, "type": "expense", "category": "Makanan", "date": "' + today + '", "accountHint": "Cash", "destAccountHint": "", "adminFee": 0}\n\n' +
@@ -172,5 +205,17 @@ export function buildNaturalLanguagePrompt(
     'Input: "pindahin 50k dari gopay ke bca"\n' +
     '→ {"description": "Pindah Saldo", "amount": 50000, "type": "transfer", "category": "", "date": "' + today + '", "accountHint": "GoPay", "destAccountHint": "BCA", "adminFee": 0}\n\n' +
     'Input: "kirim dana 500rb mandiri ke bca admin 2500"\n' +
-    '→ {"description": "Kirim Dana", "amount": 500000, "type": "transfer", "category": "", "date": "' + today + '", "accountHint": "Mandiri", "destAccountHint": "BCA", "adminFee": 2500}';
+    '→ {"description": "Kirim Dana", "amount": 500000, "type": "transfer", "category": "", "date": "' + today + '", "accountHint": "Mandiri", "destAccountHint": "BCA", "adminFee": 2500, "debtType": "", "debtPerson": ""}\n\n' +
+    'Input: "nitip abang beliin susu 50rb di alfamart"\n' +
+    '→ {"description": "Susu Alfamart", "amount": 50000, "type": "expense", "category": "Belanja", "date": "' + today + '", "accountHint": "", "destAccountHint": "", "adminFee": 0, "debtType": "hutang", "debtPerson": "abang"}\n\n' +
+    'Input: "bayarin temen makan 100rb"\n' +
+    '→ {"description": "Makan Bersama", "amount": 100000, "type": "expense", "category": "Makanan", "date": "' + today + '", "accountHint": "", "destAccountHint": "", "adminFee": 0, "debtType": "piutang", "debtPerson": "temen"}\n\n' +
+    'Input: "nraktir kopi temen 50k cash"\n' +
+    '→ {"description": "Kopi", "amount": 50000, "type": "expense", "category": "Makanan", "date": "' + today + '", "accountHint": "Cash", "destAccountHint": "", "adminFee": 0, "debtType": "piutang", "debtPerson": "temen"}\n\n' +
+    'Input: "ditalangin dulu 200rb buat beli obat"\n' +
+    '→ {"description": "Beli Obat", "amount": 200000, "type": "expense", "category": "Kesehatan", "date": "' + today + '", "accountHint": "", "destAccountHint": "", "adminFee": 0, "debtType": "hutang", "debtPerson": ""}\n\n' +
+    'Input: "patungan nasgor 4 orang total 100rb"\n' +
+    '→ {"description": "Patungan Nasi Goreng", "amount": 100000, "type": "expense", "category": "Makanan", "date": "' + today + '", "accountHint": "", "destAccountHint": "", "adminFee": 0, "debtType": "", "debtPerson": "", "splitBill": { "mode": "equal", "totalPeople": 4 }}\n\n' +
+    'Input: "split bill bakso andi 30k budi 25k"\n' +
+    '→ {"description": "Split Bill Bakso", "amount": 55000, "type": "expense", "category": "Makanan", "date": "' + today + '", "accountHint": "", "destAccountHint": "", "adminFee": 0, "debtType": "", "debtPerson": "", "splitBill": { "mode": "custom", "participants": [{ "person": "andi", "amount": 30000 }, { "person": "budi", "amount": 25000 }] }}';
 }

@@ -21,6 +21,7 @@ var settingsCache = { paydayStart: 1, geminiApiKey: '' };
 var budgetCache = {};
 var subTypeCache = null;
 var paydayOverridesCache = {};
+var debtCache = [];
 var uid = null;
 
 // Listener unsubscribe functions
@@ -30,6 +31,7 @@ var unsubSettings = null;
 var unsubBudget = null;
 var unsubSubType = null;
 var unsubPaydayOverrides = null;
+var unsubDebt = null;
 
 function initDataListeners(userUid) {
     uid = userUid;
@@ -116,6 +118,32 @@ function initDataListeners(userUid) {
         }, function (err) {
             console.error('PaydayOverrides listener error:', err);
         });
+
+    // Debt listener
+    unsubDebt = userRef.collection('debts')
+        .onSnapshot(function (snap) {
+            debtCache = snap.docs.map(function (doc) {
+                var data = doc.data();
+                return {
+                    id: doc.id,
+                    person: data.person,
+                    type: data.type,
+                    amount: data.amount,
+                    description: data.description || '',
+                    date: data.date,
+                    accountId: data.accountId || '',
+                    remainingAmount: data.remainingAmount != null ? data.remainingAmount : data.amount,
+                    status: data.status || 'pending',
+                    payments: data.payments || [],
+                    createdAt: data.createdAt,
+                    settledAt: data.settledAt || null
+                };
+            });
+            renderActivePage();
+        }, function (err) {
+            showToast('Gagal memuat data hutang/piutang: ' + err.message);
+            console.error(err);
+        });
 }
 
 function getSubTypes(accountType) {
@@ -130,10 +158,12 @@ function cleanupDataListeners() {
     if (unsubBudget) { unsubBudget(); unsubBudget = null; }
     if (unsubSubType) { unsubSubType(); unsubSubType = null; }
     if (unsubPaydayOverrides) { unsubPaydayOverrides(); unsubPaydayOverrides = null; }
+    if (unsubDebt) { unsubDebt(); unsubDebt = null; }
     txCache = [];
     accCache = [];
     budgetCache = {};
     paydayOverridesCache = {};
+    debtCache = [];
     uid = null;
 }
 
@@ -144,12 +174,13 @@ function renderActivePage() {
     else if (activePage.id === 'page-transactions') renderTransactions();
     else if (activePage.id === 'page-accounts') { renderAccountsPage(); renderSubTypeSettings(); }
     else if (activePage.id === 'page-budgets') renderBudgets();
+    else if (activePage.id === 'page-debts') renderDebts();
     populateAccountSelect();
 }
 
 // === UTILITY: ACCOUNT BALANCE (computed dynamically) ===
 function getAccountBalance(accountId) {
-    return txCache.reduce(function (sum, t) {
+    var txBalance = txCache.reduce(function (sum, t) {
         if (t.type === 'transfer') {
             if (t.accountId === accountId) return sum - t.amount;
             if (t.transferToAccountId === accountId) return sum + t.amount;
@@ -158,6 +189,16 @@ function getAccountBalance(accountId) {
         if (t.accountId !== accountId) return sum;
         return sum + (t.type === 'income' ? t.amount : -t.amount);
     }, 0);
+
+    if (debtCache && debtCache.length > 0) {
+        debtCache.forEach(function (d) {
+            if (d.type === 'piutang' && d.accountId === accountId) {
+                txBalance -= (d.remainingAmount || 0);
+            }
+        });
+    }
+
+    return txBalance;
 }
 
 function getAccountDisplayBalance(account) {
@@ -268,6 +309,7 @@ document.querySelectorAll('.nav-btn').forEach(function (btn) {
         if (btn.dataset.page === 'transactions') renderTransactions();
         if (btn.dataset.page === 'accounts') { renderAccountsPage(); renderSubTypeSettings(); }
         if (btn.dataset.page === 'budgets') renderBudgets();
+        if (btn.dataset.page === 'debts') renderDebts();
         if (btn.dataset.page === 'add') { updateFormForType(); populateAccountSelect(); }
     });
 });
@@ -294,6 +336,15 @@ function updateFormForType() {
     var isEdit = !!document.getElementById('edit-tx-id').value;
     document.getElementById('admin-fee-row').style.display = (isTransfer && !isEdit) ? '' : 'none';
     document.getElementById('scanner-section').style.display = isTransfer ? 'none' : '';
+    // Split bill section — expense only, not edit mode
+    var isEdit2 = !!document.getElementById('edit-tx-id').value;
+    var splitSection = document.getElementById('split-bill-section');
+    if (splitSection) {
+        splitSection.style.display = (currentType === 'expense' && !isEdit2) ? '' : 'none';
+        if (currentType !== 'expense' || isEdit2) {
+            resetSplitBillForm();
+        }
+    }
     if (!isTransfer) updateCategoryOptions();
     populateAccountSelect();
     if (isTransfer) populateTransferToAccountSelect();
@@ -428,10 +479,65 @@ document.getElementById('transaction-form').addEventListener('submit', function 
         promise = db.collection('users').doc(uid).collection('transactions').add(txData);
     }
 
+    // --- Split Bill ---
+    var splitEnabled = document.getElementById('split-bill-enabled').checked;
+    var splitDebtData = null;
+    if (currentType === 'expense' && splitEnabled && !editId) {
+        var splitMode = document.querySelector('input[name="split-mode"]:checked').value;
+        var totalAmount = parseInt(document.getElementById('amount').value) || 0;
+        splitDebtData = [];
+
+        if (splitMode === 'equal') {
+            var totalPeople = parseInt(document.getElementById('split-total-people').value) || 0;
+            if (totalPeople >= 2) {
+                var perPerson = Math.floor(totalAmount / totalPeople);
+                for (var si = 0; si < totalPeople - 1; si++) {
+                    var amt = (si === totalPeople - 2) ? totalAmount - perPerson * (totalPeople - 1) : perPerson;
+                    splitDebtData.push({ person: 'Teman ' + (si + 1), amount: amt });
+                }
+            }
+        } else {
+            var rows = document.querySelectorAll('#split-participants-list .split-participant-row');
+            rows.forEach(function (row) {
+                var name = (row.querySelector('.split-part-name').value || 'Teman').trim();
+                var amt = parseInt(row.querySelector('.split-part-amount').value) || 0;
+                if (amt > 0) splitDebtData.push({ person: name, amount: amt });
+            });
+        }
+    }
+
     promise.then(function () {
-        resetTransactionForm();
-        updateCategoryOptions();
-        showToast(editId ? 'Transaksi diperbarui!' : 'Transaksi berhasil disimpan!');
+        // Create piutang debts for split bill
+        if (splitDebtData && splitDebtData.length > 0) {
+            var debtColl = db.collection('users').doc(uid).collection('debts');
+            var promises = splitDebtData.map(function (d) {
+                return debtColl.add({
+                    person: d.person,
+                    type: 'piutang',
+                    amount: d.amount,
+                    description: desc,
+                    date: date,
+                    accountId: '',
+                    remainingAmount: d.amount,
+                    status: 'pending',
+                    payments: [],
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    settledAt: null
+                });
+            });
+            Promise.all(promises).then(function () {
+                resetTransactionForm();
+                resetSplitBillForm();
+                updateCategoryOptions();
+                showToast('Split bill disimpan! 1 expense + ' + splitDebtData.length + ' piutang');
+            }).catch(function (err) {
+                showToast('Gagal menyimpan piutang: ' + err.message);
+            });
+        } else {
+            resetTransactionForm();
+            updateCategoryOptions();
+            showToast(editId ? 'Transaksi diperbarui!' : 'Transaksi berhasil disimpan!');
+        }
     }).catch(function (err) {
         showToast('Gagal menyimpan: ' + err.message);
     });
@@ -515,8 +621,9 @@ function renderPaydayOverrides() {
 function renderDashboard() {
     var txns = txCache;
 
-    var incomeTotal = txns.filter(function (t) { return t.type === 'income'; }).reduce(function (s, t) { return s + t.amount; }, 0);
-    var expenseTotal = txns.filter(function (t) { return t.type === 'expense'; }).reduce(function (s, t) { return s + t.amount; }, 0);
+    var piutangTotal = txns.filter(function (t) { return t.type === 'income' && t.category === '💰 Piutang'; }).reduce(function (s, t) { return s + t.amount; }, 0);
+    var incomeTotal = txns.filter(function (t) { return t.type === 'income' && t.category !== '💰 Piutang'; }).reduce(function (s, t) { return s + t.amount; }, 0);
+    var expenseTotal = Math.max(0, txns.filter(function (t) { return t.type === 'expense'; }).reduce(function (s, t) { return s + t.amount; }, 0) - piutangTotal);
     var accountTotal = accCache.reduce(function (s, a) { return s + getAccountDisplayBalance(a); }, 0);
     var unassignedNet = txns.filter(function (t) { return !t.accountId && t.type !== 'transfer'; }).reduce(function (s, t) { return s + (t.type === 'income' ? t.amount : -t.amount); }, 0);
     var balance = accountTotal + unassignedNet;
@@ -549,6 +656,7 @@ function renderDashboard() {
     renderBudgetProgress();
     renderBudgetAlerts();
     renderPortfolio();
+    renderDebtDashboardSummary();
 }
 
 function renderTransactionItems(txns) {
@@ -595,13 +703,25 @@ function renderPieChart(txns, monthKey) {
     canvas.style.display = 'block';
     empty.style.display = 'none';
 
+    // Subtract piutang payments from expense total
+    var piutangPayments = txns.filter(function (t) { return t.type === 'income' && t.category === '💰 Piutang'; });
+    if (monthKey) {
+        piutangPayments = piutangPayments.filter(function (t) { return getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === monthKey; });
+    }
+    var piutangOffset = piutangPayments.reduce(function (s, t) { return s + t.amount; }, 0);
+
     var map = {};
     expenses.forEach(function (t) { map[t.category] = (map[t.category] || 0) + t.amount; });
 
     var entries = Object.entries(map).sort(function (a, b) { return b[1] - a[1]; });
     var labels = entries.map(function (e) { return e[0]; });
     var values = entries.map(function (e) { return e[1]; });
-    var total = values.reduce(function (s, v) { return s + v; }, 0);
+    var total = Math.max(0, values.reduce(function (s, v) { return s + v; }, 0) - piutangOffset);
+    if (total <= 0) {
+        canvas.style.display = 'none';
+        empty.style.display = 'block';
+        return;
+    }
 
     var dpr = window.devicePixelRatio || 1;
     var w = parent.clientWidth - 48;
@@ -709,8 +829,9 @@ function renderBarChart(txns) {
     for (var i = 5; i >= 0; i--) {
         var d = new Date(currentFinMonth.getFullYear(), currentFinMonth.getMonth() - i, 1);
         var key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-        var inc = txns.filter(function (t) { return t.type === 'income' && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === key; }).reduce(function (s, t) { return s + t.amount; }, 0);
-        var exp = txns.filter(function (t) { return t.type === 'expense' && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === key; }).reduce(function (s, t) { return s + t.amount; }, 0);
+        var inc = txns.filter(function (t) { return t.type === 'income' && t.category !== '💰 Piutang' && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === key; }).reduce(function (s, t) { return s + t.amount; }, 0);
+        var piutangInMonth = txns.filter(function (t) { return t.type === 'income' && t.category === '💰 Piutang' && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === key; }).reduce(function (s, t) { return s + t.amount; }, 0);
+        var exp = Math.max(0, txns.filter(function (t) { return t.type === 'expense' && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === key; }).reduce(function (s, t) { return s + t.amount; }, 0) - piutangInMonth);
         months.push({ label: d.toLocaleDateString('id-ID', { month: 'short' }), inc: inc, exp: exp });
     }
 
@@ -975,6 +1096,7 @@ function resetTransactionForm() {
     document.getElementById('edit-tx-id').value = '';
     document.getElementById('date').value = new Date().toISOString().slice(0, 10);
     document.getElementById('tx-admin-fee').value = '0';
+    resetSplitBillForm();
     // Reset type tabs to expense
     currentType = 'expense';
     typeTabs.querySelectorAll('.type-tab').forEach(function (t) { t.classList.remove('active'); });
@@ -984,6 +1106,133 @@ function resetTransactionForm() {
     document.querySelector('#page-add .form-card h2').textContent = 'Tambah Transaksi';
     document.getElementById('submit-tx-btn').textContent = 'Simpan Transaksi';
     document.getElementById('btn-cancel-edit').style.display = 'none';
+}
+
+// === SPLIT BILL ===
+var splitBillEnabled = document.getElementById('split-bill-enabled');
+if (splitBillEnabled) {
+    splitBillEnabled.addEventListener('change', function () {
+        var body = document.getElementById('split-bill-body');
+        body.style.display = this.checked ? '' : 'none';
+        if (this.checked) {
+            if (document.getElementById('split-participants-list').children.length === 0) {
+                addParticipantRow('Teman');
+            }
+            updateEqualSplitSummary();
+            updateCustomSplitSummary();
+        }
+    });
+
+    document.querySelectorAll('input[name="split-mode"]').forEach(function (r) {
+        r.addEventListener('change', function () {
+            var isEqual = this.value === 'equal';
+            document.getElementById('split-equal-row').style.display = isEqual ? '' : 'none';
+            document.getElementById('split-custom-row').style.display = isEqual ? 'none' : '';
+            if (isEqual) updateEqualSplitSummary();
+            else updateCustomSplitSummary();
+        });
+    });
+
+    document.getElementById('split-total-people').addEventListener('input', updateEqualSplitSummary);
+
+    document.getElementById('btn-add-participant').addEventListener('click', function () {
+        addParticipantRow('');
+    });
+
+    // Wire amount changes to update split summaries
+    document.getElementById('amount').addEventListener('input', function () {
+        if (document.getElementById('split-bill-enabled').checked) {
+            updateEqualSplitSummary();
+            updateCustomSplitSummary();
+        }
+    });
+}
+
+function addParticipantRow(nameHint) {
+    var list = document.getElementById('split-participants-list');
+    var row = document.createElement('div');
+    row.className = 'split-participant-row';
+    row.innerHTML =
+        '<input type="text" class="split-part-name" placeholder="Nama" value="' + escapeHtml(nameHint || '') + '">' +
+        '<input type="number" class="split-part-amount" placeholder="Jumlah (Rp)" min="1">' +
+        '<button type="button" class="btn-remove-participant" title="Hapus">&times;</button>';
+    row.querySelector('.btn-remove-participant').addEventListener('click', function () {
+        row.remove();
+        updateCustomSplitSummary();
+        updateRemoveButtons();
+    });
+    row.querySelector('.split-part-amount').addEventListener('input', updateCustomSplitSummary);
+    row.querySelector('.split-part-name').addEventListener('input', updateCustomSplitSummary);
+    list.appendChild(row);
+    updateRemoveButtons();
+}
+
+function updateRemoveButtons() {
+    var rows = document.querySelectorAll('#split-participants-list .split-participant-row');
+    rows.forEach(function (row) {
+        var btn = row.querySelector('.btn-remove-participant');
+        if (btn) btn.style.display = (rows.length <= 1) ? 'none' : '';
+    });
+}
+
+function updateEqualSplitSummary() {
+    var totalAmount = parseInt(document.getElementById('amount').value) || 0;
+    var totalPeople = parseInt(document.getElementById('split-total-people').value) || 0;
+    var perPersonEl = document.getElementById('split-per-person');
+    var yourShareEl = document.getElementById('split-your-share-eq');
+    var totalPiutangEl = document.getElementById('split-total-piutang-eq');
+    if (totalAmount > 0 && totalPeople >= 2) {
+        var perPerson = Math.floor(totalAmount / totalPeople);
+        var yourShare = perPerson;
+        var totalPiutang = totalAmount - yourShare;
+        perPersonEl.textContent = 'Rp ' + formatCurrency(perPerson);
+        yourShareEl.textContent = 'Rp ' + formatCurrency(yourShare);
+        totalPiutangEl.textContent = 'Rp ' + formatCurrency(totalPiutang);
+    } else {
+        perPersonEl.textContent = 'Rp 0';
+        yourShareEl.textContent = 'Rp 0';
+        totalPiutangEl.textContent = 'Rp 0';
+    }
+}
+
+function updateCustomSplitSummary() {
+    var totalAmount = parseInt(document.getElementById('amount').value) || 0;
+    var rows = document.querySelectorAll('#split-participants-list .split-participant-row');
+    var friendsTotal = 0;
+    rows.forEach(function (row) {
+        friendsTotal += parseInt(row.querySelector('.split-part-amount').value) || 0;
+    });
+    var yourShare = Math.max(0, totalAmount - friendsTotal);
+    document.getElementById('split-total-amount').textContent = formatCurrency(totalAmount);
+    document.getElementById('split-friends-total').textContent = formatCurrency(friendsTotal);
+    var yourShareCustom = document.getElementById('split-your-share-custom');
+    yourShareCustom.textContent = formatCurrency(yourShare);
+    yourShareCustom.style.color = (friendsTotal > totalAmount) ? 'var(--expense)' : '#1e293b';
+}
+
+function resetSplitBillForm() {
+    var toggleEl = document.getElementById('split-bill-enabled');
+    if (toggleEl) toggleEl.checked = false;
+    var bodyEl = document.getElementById('split-bill-body');
+    if (bodyEl) bodyEl.style.display = 'none';
+    var listEl = document.getElementById('split-participants-list');
+    if (listEl) listEl.innerHTML = '';
+    var equalRadio = document.querySelector('input[name="split-mode"][value="equal"]');
+    if (equalRadio) equalRadio.checked = true;
+    var equalRow = document.getElementById('split-equal-row');
+    if (equalRow) equalRow.style.display = '';
+    var customRow = document.getElementById('split-custom-row');
+    if (customRow) customRow.style.display = 'none';
+    var peopleInput = document.getElementById('split-total-people');
+    if (peopleInput) peopleInput.value = '';
+    var perPerson = document.getElementById('split-per-person');
+    if (perPerson) perPerson.textContent = 'Rp 0';
+    var yourShareEq = document.getElementById('split-your-share-eq');
+    if (yourShareEq) yourShareEq.textContent = 'Rp 0';
+    var totalPiutangEq = document.getElementById('split-total-piutang-eq');
+    if (totalPiutangEq) totalPiutangEq.textContent = 'Rp 0';
+    var yourShareCustom = document.getElementById('split-your-share-custom');
+    if (yourShareCustom) { yourShareCustom.textContent = '0'; yourShareCustom.style.color = '#1e293b'; }
 }
 
 // === RENDER: BUDGETS PAGE ===
@@ -1256,14 +1505,15 @@ function renderPortfolio() {
 function renderAccountsPage() {
     var accounts = accCache;
     var grid = document.getElementById('accounts-grid');
-    var totalEl = document.getElementById('accounts-total');
+    var totalEl = document.getElementById('accounts-total-row');
     var totalValue = document.getElementById('accounts-total-value');
 
     // Unassigned transactions (no accountId)
     var unassignedTxns = txCache.filter(function (t) { return !t.accountId; });
-    var unassignedIncome = unassignedTxns.filter(function (t) { return t.type === 'income'; }).reduce(function (s, t) { return s + t.amount; }, 0);
+    var unassignedIncome = unassignedTxns.filter(function (t) { return t.type === 'income' && t.category !== '💰 Piutang'; }).reduce(function (s, t) { return s + t.amount; }, 0);
+    var unassignedPiutang = unassignedTxns.filter(function (t) { return t.type === 'income' && t.category === '💰 Piutang'; }).reduce(function (s, t) { return s + t.amount; }, 0);
     var unassignedExpense = unassignedTxns.filter(function (t) { return t.type === 'expense'; }).reduce(function (s, t) { return s + t.amount; }, 0);
-    var unassignedBalance = unassignedIncome - unassignedExpense;
+    var unassignedBalance = unassignedIncome + unassignedPiutang - unassignedExpense;
 
     if (!accounts.length && !unassignedTxns.length) {
         totalEl.style.display = 'none';
@@ -1272,8 +1522,30 @@ function renderAccountsPage() {
     }
 
     var totalBalance = accounts.reduce(function (s, a) { return s + getAccountDisplayBalance(a); }, 0) + unassignedBalance;
-    totalEl.style.display = 'flex';
+    totalEl.style.display = '';
     totalValue.textContent = 'Rp ' + formatCurrency(totalBalance);
+
+    // Debt-adjusted balance
+    var activePiutang = debtCache.filter(function (d) { return d.type === 'piutang' && d.status !== 'paid'; })
+        .reduce(function (s, d) { return s + (d.remainingAmount || 0); }, 0);
+    var activeHutang = debtCache.filter(function (d) { return d.type === 'hutang' && d.status !== 'paid'; })
+        .reduce(function (s, d) { return s + (d.remainingAmount || 0); }, 0);
+    var afterDebtBalance = totalBalance + activePiutang - activeHutang;
+    document.getElementById('accounts-total-after-value').textContent = 'Rp ' + formatCurrency(afterDebtBalance);
+
+    // Debt summary section
+    var debtSection = document.getElementById('accounts-debt-section');
+    if (activePiutang > 0 || activeHutang > 0) {
+        debtSection.style.display = '';
+        document.getElementById('acc-hutang-val').textContent = '−Rp ' + formatCurrency(activeHutang);
+        document.getElementById('acc-piutang-val').textContent = '+Rp ' + formatCurrency(activePiutang);
+        var netDebt = activePiutang - activeHutang;
+        var netEl = document.getElementById('acc-debt-net-val');
+        netEl.textContent = (netDebt >= 0 ? '+' : '') + 'Rp ' + formatCurrency(netDebt);
+        netEl.style.color = netDebt >= 0 ? 'var(--income)' : 'var(--expense)';
+    } else {
+        debtSection.style.display = 'none';
+    }
 
     var unassignedCard = '';
     if (unassignedTxns.length > 0) {
@@ -1288,6 +1560,116 @@ function renderAccountsPage() {
             : '';
         return '<div class="account-card type-' + a.accountType + '"><div class="account-card-header"><span class="account-bank-name">' + escapeHtml(a.bankName) + '</span><span class="account-type-badge badge-' + a.accountType + '">' + getAccountTypeLabel(a.accountType) + '</span>' + subBadge + '</div><span class="account-balance">Rp ' + formatCurrency(balance) + '</span><div class="account-card-actions">' + adjustBtn + '<button class="btn-icon edit" data-edit-account="' + a.id + '" title="Edit"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button><button class="btn-icon delete" data-delete-account="' + a.id + '" title="Hapus"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button></div></div>';
     }).join('');
+}
+
+// === DEBT RENDERING ===
+function renderDebtDashboardSummary() {
+    var totalHutang = debtCache.filter(function (d) { return d.type === 'hutang' && d.status !== 'paid'; })
+        .reduce(function (s, d) { return s + (d.remainingAmount || 0); }, 0);
+    var totalPiutang = debtCache.filter(function (d) { return d.type === 'piutang' && d.status !== 'paid'; })
+        .reduce(function (s, d) { return s + (d.remainingAmount || 0); }, 0);
+    var debtCard = document.getElementById('debt-summary-section');
+    if (debtCard) {
+        document.getElementById('dash-hutang-val').textContent = 'Rp ' + formatCurrency(totalHutang);
+        document.getElementById('dash-piutang-val').textContent = 'Rp ' + formatCurrency(totalPiutang);
+        var dashNet = totalPiutang - totalHutang;
+        var dashNetEl = document.getElementById('dash-debt-net');
+        dashNetEl.textContent = (dashNet >= 0 ? '+' : '') + 'Rp ' + formatCurrency(dashNet);
+        dashNetEl.style.color = dashNet >= 0 ? 'var(--income)' : 'var(--expense)';
+        debtCard.style.display = (totalHutang > 0 || totalPiutang > 0) ? '' : 'none';
+    }
+}
+
+function renderDebts() {
+    var debts = debtCache;
+    var typeFilter = document.getElementById('debt-filter-type').value;
+    var statusFilter = document.getElementById('debt-filter-status').value;
+
+    var filtered = debts;
+    if (typeFilter !== 'all') filtered = filtered.filter(function (d) { return d.type === typeFilter; });
+    if (statusFilter === 'active') filtered = filtered.filter(function (d) { return d.status !== 'paid'; });
+    else if (statusFilter !== 'all') filtered = filtered.filter(function (d) { return d.status === statusFilter; });
+
+    var totalHutang = debts.filter(function (d) { return d.type === 'hutang' && d.status !== 'paid'; })
+        .reduce(function (s, d) { return s + (d.remainingAmount || 0); }, 0);
+    var totalPiutang = debts.filter(function (d) { return d.type === 'piutang' && d.status !== 'paid'; })
+        .reduce(function (s, d) { return s + (d.remainingAmount || 0); }, 0);
+
+    document.getElementById('debt-hutang-display').textContent = 'Rp ' + formatCurrency(totalHutang);
+    document.getElementById('debt-piutang-display').textContent = 'Rp ' + formatCurrency(totalPiutang);
+    var netDebt = totalPiutang - totalHutang;
+    var netEl = document.getElementById('debt-net-display');
+    netEl.textContent = (netDebt >= 0 ? '+' : '') + 'Rp ' + formatCurrency(netDebt);
+    netEl.style.color = netDebt >= 0 ? 'var(--income)' : 'var(--expense)';
+
+    document.getElementById('debt-list').innerHTML = renderDebtItems(filtered);
+    populateDebtAccountSelect();
+}
+
+function renderDebtItems(debts) {
+    if (!debts.length) {
+        return '<div class="empty-state">Belum ada data hutang/piutang</div>';
+    }
+    return debts.map(function (d) {
+        var typeLabel = d.type === 'hutang' ? 'Hutang' : 'Piutang';
+        var typeClass = d.type === 'hutang' ? 'debt-hutang' : 'debt-piutang';
+        var statusLabel = { pending: 'Belum Dibayar', partial: 'Cicilan', paid: 'Lunas' }[d.status] || d.status;
+        var statusClass = 'debt-status-' + d.status;
+        var account = d.accountId ? getAccountById(d.accountId) : null;
+        var accountBadge = account ? ' <span class="tx-account-name">' + escapeHtml(account.bankName) + '</span>' : '';
+        var paymentsHtml = '';
+        if (d.payments && d.payments.length > 0) {
+            paymentsHtml = '<div class="debt-payments">' + d.payments.map(function (p, idx) {
+                var pAccount = p.accountId ? getAccountById(p.accountId) : null;
+                var pAccName = pAccount ? escapeHtml(pAccount.bankName) : 'Tanpa Akun';
+                return '<div class="debt-payment-item">' +
+                    '<span class="debt-payment-amount">' + (d.type === 'piutang' ? '+' : '−') + 'Rp ' + formatCurrency(p.amount) + '</span>' +
+                    '<span class="debt-payment-meta">' + formatDate(p.date) + ' · ' + pAccName + (p.note ? ' · ' + escapeHtml(p.note) : '') + '</span>' +
+                    '<button class="debt-payment-delete" data-debt-id="' + d.id + '" data-payment-idx="' + idx + '" title="Hapus Pembayaran"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>' +
+                    '</div>';
+            }).join('') + '</div>';
+        }
+        var actionBtn = '';
+        if (d.status !== 'paid') {
+            actionBtn = '<button class="btn-debt-pay" data-debt-id="' + d.id + '">' +
+                (d.type === 'hutang' ? 'Bayar' : 'Terima') + '</button>';
+        }
+        return '<div class="debt-item ' + typeClass + '">' +
+            '<div class="debt-item-header">' +
+                '<span class="debt-person">' + escapeHtml(d.person) + '</span>' +
+                '<span class="debt-type-badge ' + typeClass + '">' + typeLabel + '</span>' +
+                '<span class="debt-status-badge ' + statusClass + '">' + statusLabel + '</span>' +
+            '</div>' +
+            '<div class="debt-item-body">' +
+                '<span class="debt-desc">' + escapeHtml(d.description) + '</span>' +
+                '<span class="debt-meta">' + formatDate(d.date) + accountBadge + '</span>' +
+            '</div>' +
+            '<div class="debt-item-amounts">' +
+                '<span class="debt-amount">Rp ' + formatCurrency(d.amount) + '</span>' +
+                (d.status !== 'pending' ? '<span class="debt-remaining">Sisa: Rp ' + formatCurrency(d.remainingAmount) + '</span>' : '') +
+            '</div>' +
+            paymentsHtml +
+            '<div class="debt-item-actions">' +
+                actionBtn +
+                '<button class="btn-icon edit" data-edit-debt="' + d.id + '" title="Edit"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
+                '<button class="btn-icon delete" data-delete-debt="' + d.id + '" title="Hapus"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>' +
+            '</div>' +
+            '</div>';
+    }).join('');
+}
+
+function populateDebtAccountSelect() {
+    var select = document.getElementById('debt-account');
+    if (!select) return;
+    var curVal = select.value;
+    select.innerHTML = '<option value="">-- Pilih Akun --</option>';
+    accCache.forEach(function (a) {
+        var opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = a.bankName + ' (' + getAccountTypeLabel(a.accountType) + ')';
+        select.appendChild(opt);
+    });
+    select.value = curVal;
 }
 
 // === ACCOUNT MODAL ===
@@ -1517,6 +1899,286 @@ document.addEventListener('click', function (e) {
     }
 });
 
+// === DEBT MODALS ===
+var debtModal = document.getElementById('debt-modal');
+var paymentModal = document.getElementById('payment-modal');
+var editingDebtId = null;
+
+// --- Debt Form Modal ---
+document.getElementById('btn-add-debt').addEventListener('click', function () { openDebtModal(); });
+
+function openDebtModal(debt) {
+    editingDebtId = debt ? debt.id : null;
+    document.getElementById('debt-id').value = debt ? debt.id : '';
+    document.getElementById('debt-modal-title').textContent = debt ? 'Edit Hutang/Piutang' : 'Tambah Hutang/Piutang';
+    document.getElementById('debt-type').value = debt ? debt.type : 'hutang';
+    document.getElementById('debt-person').value = debt ? debt.person : '';
+    document.getElementById('debt-amount').value = debt ? debt.amount : '';
+    document.getElementById('debt-desc').value = debt ? (debt.description || '') : '';
+    document.getElementById('debt-date').value = debt ? debt.date : new Date().toISOString().slice(0, 10);
+    populateDebtAccountSelect();
+    document.getElementById('debt-account').value = debt ? (debt.accountId || '') : '';
+    document.getElementById('debt-submit-btn').textContent = debt ? 'Update' : 'Simpan';
+    debtModal.classList.add('show');
+}
+
+document.getElementById('debt-modal-close').addEventListener('click', function () {
+    debtModal.classList.remove('show');
+    editingDebtId = null;
+});
+
+debtModal.addEventListener('click', function (e) {
+    if (e.target === debtModal) { debtModal.classList.remove('show'); editingDebtId = null; }
+});
+
+document.getElementById('debt-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (!uid) return;
+
+    var type = document.getElementById('debt-type').value;
+    var person = document.getElementById('debt-person').value.trim();
+    var amount = parseInt(document.getElementById('debt-amount').value) || 0;
+    var desc = document.getElementById('debt-desc').value.trim();
+    var date = document.getElementById('debt-date').value;
+    var accountId = document.getElementById('debt-account').value;
+
+    if (!person || amount <= 0 || !date) {
+        showToast('Mohon isi nama, jumlah, dan tanggal');
+        return;
+    }
+
+    var debtData = {
+        person: person,
+        type: type,
+        amount: amount,
+        description: desc,
+        date: date,
+        accountId: accountId
+    };
+
+    var debtId = document.getElementById('debt-id').value;
+    if (debtId) {
+        // Update existing debt
+        var existing = debtCache.find(function (d) { return d.id === debtId; });
+        if (existing) {
+            var totalPaid = (existing.payments || []).reduce(function (s, p) { return s + p.amount; }, 0);
+            var newRemaining = Math.max(0, amount - totalPaid);
+            var newStatus = 'pending';
+            if (newRemaining <= 0) newStatus = 'paid';
+            else if (totalPaid > 0 && newRemaining < amount) newStatus = 'partial';
+            debtData.remainingAmount = newRemaining;
+            debtData.status = newStatus;
+            debtData.payments = existing.payments || [];
+            if (newStatus === 'paid') debtData.settledAt = firebase.firestore.FieldValue.serverTimestamp();
+            if (newStatus !== 'paid' && existing.status === 'paid') debtData.settledAt = null;
+        }
+        db.collection('users').doc(uid).collection('debts').doc(debtId).update(debtData)
+            .then(function () {
+                showToast('Hutang/piutang berhasil diupdate');
+                debtModal.classList.remove('show');
+                editingDebtId = null;
+            })
+            .catch(function (err) {
+                showToast('Gagal mengupdate: ' + err.message);
+            });
+    } else {
+        // Create new
+        debtData.remainingAmount = amount;
+        debtData.status = 'pending';
+        debtData.payments = [];
+        debtData.settledAt = null;
+        debtData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+        db.collection('users').doc(uid).collection('debts').add(debtData)
+            .then(function () {
+                showToast('Hutang/piutang berhasil ditambahkan');
+                debtModal.classList.remove('show');
+                editingDebtId = null;
+            })
+            .catch(function (err) {
+                showToast('Gagal menambahkan: ' + err.message);
+            });
+    }
+});
+
+// --- Payment Modal ---
+document.getElementById('payment-modal-close').addEventListener('click', function () {
+    paymentModal.classList.remove('show');
+});
+
+paymentModal.addEventListener('click', function (e) {
+    if (e.target === paymentModal) paymentModal.classList.remove('show');
+});
+
+function openPaymentModal(debtId) {
+    var debt = debtCache.find(function (d) { return d.id === debtId; });
+    if (!debt) return;
+    document.getElementById('payment-debt-id').value = debtId;
+    document.getElementById('payment-amount').value = '';
+    document.getElementById('payment-date').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('payment-note').value = '';
+    // Populate payment account dropdown
+    var pSelect = document.getElementById('payment-account');
+    pSelect.innerHTML = '<option value="">-- Pilih Akun --</option>';
+    accCache.forEach(function (a) {
+        var opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = a.bankName + ' (' + getAccountTypeLabel(a.accountType) + ')';
+        pSelect.appendChild(opt);
+    });
+    // Pre-select debt's linked account if set
+    pSelect.value = debt.accountId || '';
+
+    var infoEl = document.getElementById('payment-info');
+    var label = debt.type === 'hutang' ? 'Hutang' : 'Piutang';
+    var remaining = debt.remainingAmount != null ? debt.remainingAmount : debt.amount;
+    infoEl.innerHTML = '<strong>' + escapeHtml(debt.person) + '</strong> · ' + label + ' · Total: Rp ' + formatCurrency(debt.amount) + ' · <strong>Sisa: Rp ' + formatCurrency(remaining) + '</strong>';
+
+    document.getElementById('payment-modal-title').textContent = debt.type === 'hutang' ? 'Bayar Hutang' : 'Terima Pembayaran Piutang';
+    paymentModal.classList.add('show');
+}
+
+document.getElementById('payment-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (!uid) return;
+
+    var debtId = document.getElementById('payment-debt-id').value;
+    var debt = debtCache.find(function (d) { return d.id === debtId; });
+    if (!debt) return;
+
+    var payAmount = parseInt(document.getElementById('payment-amount').value) || 0;
+    var payDate = document.getElementById('payment-date').value;
+    var payAccountId = document.getElementById('payment-account').value;
+    var payNote = document.getElementById('payment-note').value.trim();
+    var remaining = debt.remainingAmount != null ? debt.remainingAmount : debt.amount;
+
+    if (payAmount <= 0 || !payDate) {
+        showToast('Mohon isi jumlah dan tanggal pembayaran');
+        return;
+    }
+
+    if (payAmount > remaining) {
+        if (!confirm('Pembayaran Rp ' + formatCurrency(payAmount) + ' melebihi sisa Rp ' + formatCurrency(remaining) + '. Lanjutkan?')) return;
+    }
+
+    var payments = (debt.payments || []).slice();
+    payments.push({
+        amount: payAmount,
+        date: payDate,
+        accountId: payAccountId,
+        note: payNote,
+        createdAt: new Date().toISOString()
+    });
+
+    var totalPaid = payments.reduce(function (s, p) { return s + p.amount; }, 0);
+    var newRemaining = Math.max(0, debt.amount - totalPaid);
+    var newStatus = 'pending';
+    if (newRemaining <= 0) newStatus = 'paid';
+    else if (payments.length > 0) newStatus = 'partial';
+
+    var updateData = {
+        payments: payments,
+        remainingAmount: newRemaining,
+        status: newStatus
+    };
+    if (newStatus === 'paid') {
+        updateData.settledAt = firebase.firestore.FieldValue.serverTimestamp();
+    }
+
+    db.collection('users').doc(uid).collection('debts').doc(debtId).update(updateData)
+        .then(function () {
+            // Create transaction for payment (ledger)
+            var txType = debt.type === 'piutang' ? 'income' : 'expense';
+            var txCategory = debt.type === 'piutang' ? '💰 Piutang' : 'Hutang';
+            var txPrefix = debt.type === 'piutang' ? 'Bayar: ' : 'Bayar Hutang: ';
+            var txDesc = txPrefix + debt.person + (payNote ? ' - ' + payNote : '');
+            return db.collection('users').doc(uid).collection('transactions').add({
+                desc: txDesc,
+                amount: payAmount,
+                type: txType,
+                category: txCategory,
+                date: payDate,
+                accountId: payAccountId,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+        })
+        .then(function () {
+            showToast('Pembayaran berhasil dicatat');
+            paymentModal.classList.remove('show');
+        })
+        .catch(function (err) {
+            showToast('Gagal mencatat pembayaran: ' + err.message);
+        });
+});
+
+// --- Debt filter listeners ---
+document.getElementById('debt-filter-type').addEventListener('change', function () { renderDebts(); });
+document.getElementById('debt-filter-status').addEventListener('change', function () { renderDebts(); });
+
+// --- Debt event delegation (edit/delete/pay) ---
+document.addEventListener('click', function (e) {
+    // Edit debt
+    var editBtn = e.target.closest('[data-edit-debt]');
+    if (editBtn) {
+        var editId = editBtn.dataset.editDebt;
+        var debt = debtCache.find(function (d) { return d.id === editId; });
+        if (debt) openDebtModal(debt);
+        return;
+    }
+
+    // Delete debt
+    var deleteBtn = e.target.closest('[data-delete-debt]');
+    if (deleteBtn) {
+        var deleteId = deleteBtn.dataset.deleteDebt;
+        var d = debtCache.find(function (x) { return x.id === deleteId; });
+        if (!d) return;
+        if (!confirm('Hapus hutang/piutang "' + d.person + '" (Rp ' + formatCurrency(d.amount) + ')? Semua pembayaran terkait juga akan dihapus.')) return;
+        if (!uid) return;
+        db.collection('users').doc(uid).collection('debts').doc(deleteId).delete()
+            .then(function () { showToast('Berhasil dihapus'); })
+            .catch(function (err) { showToast('Gagal menghapus: ' + err.message); });
+        return;
+    }
+
+    // Pay button
+    var payBtn = e.target.closest('.btn-debt-pay');
+    if (payBtn) {
+        var payId = payBtn.dataset.debtId;
+        openPaymentModal(payId);
+        return;
+    }
+
+    // Delete payment
+    var delPayBtn = e.target.closest('.debt-payment-delete');
+    if (delPayBtn) {
+        var debtId = delPayBtn.dataset.debtId;
+        var payIdx = parseInt(delPayBtn.dataset.paymentIdx);
+        var debt = debtCache.find(function (x) { return x.id === debtId; });
+        if (!debt || payIdx < 0 || payIdx >= (debt.payments || []).length) return;
+        if (!confirm('Hapus pembayaran Rp ' + formatCurrency(debt.payments[payIdx].amount) + '?')) return;
+        if (!uid) return;
+
+        var payments = debt.payments.slice();
+        payments.splice(payIdx, 1);
+        var totalPaid = payments.reduce(function (s, p) { return s + p.amount; }, 0);
+        var newRemaining = Math.max(0, debt.amount - totalPaid);
+        var newStatus = 'pending';
+        if (newRemaining <= 0) newStatus = 'paid';
+        else if (payments.length > 0) newStatus = 'partial';
+
+        var updateData = {
+            payments: payments,
+            remainingAmount: newRemaining,
+            status: newStatus
+        };
+        if (newStatus !== 'paid') updateData.settledAt = null;
+
+        db.collection('users').doc(uid).collection('debts').doc(debtId).update(updateData)
+            .then(function () { showToast('Pembayaran dihapus'); })
+            .catch(function (err) { showToast('Gagal menghapus pembayaran: ' + err.message); });
+        return;
+    }
+});
+
 // === SCANNER: AI IMAGE PARSING (Gemini only) ===
 var scannerImageData = null; // { base64, mediaType }
 
@@ -1657,7 +2319,7 @@ function extractJSON(text) {
 
 function normalizeResult(result) {
     var cats = result.type === 'income' ? CATEGORIES.income : CATEGORIES.expense;
-    return {
+    var base = {
         description: result.description || '',
         amount: parseInt(result.amount) || 0,
         type: result.type === 'income' ? 'income' : 'expense',
@@ -1665,6 +2327,11 @@ function normalizeResult(result) {
         date: result.date && /^\d{4}-\d{2}-\d{2}$/.test(result.date) ? result.date : new Date().toISOString().slice(0, 10),
         accountHint: result.accountHint || ''
     };
+    // Preserve split bill from AI scanner
+    if (result.splitBill) {
+        base.splitBill = result.splitBill;
+    }
+    return base;
 }
 
 function displayParseResult(data) {
@@ -1673,6 +2340,24 @@ function displayParseResult(data) {
         : null;
 
     parseFields.innerHTML = '<div class="parse-field"><span class="parse-field-label">Deskripsi</span><span class="parse-field-value ' + (data.description ? '' : 'missing') + '">' + escapeHtml(data.description || '(tidak terdeteksi)') + '</span></div><div class="parse-field"><span class="parse-field-label">Jumlah</span><span class="parse-field-value">Rp ' + formatCurrency(data.amount) + '</span></div><div class="parse-field"><span class="parse-field-label">Tipe</span><span class="parse-field-value">' + (data.type === 'income' ? 'Pemasukan' : 'Pengeluaran') + '</span></div><div class="parse-field"><span class="parse-field-label">Kategori</span><span class="parse-field-value">' + escapeHtml(data.category) + '</span></div><div class="parse-field"><span class="parse-field-label">Tanggal</span><span class="parse-field-value">' + formatDate(data.date) + '</span></div><div class="parse-field"><span class="parse-field-label">Akun</span><span class="parse-field-value ' + (matchedAccount ? '' : 'missing') + '">' + (matchedAccount ? escapeHtml(matchedAccount.bankName) : (data.accountHint || '(pilih manual)')) + '</span></div>';
+
+    // Show split bill info if detected
+    if (data.splitBill) {
+        var splitInfo = data.splitBill;
+        var splitHtml = '<div class="parse-field"><span class="parse-field-label">Split Bill</span>';
+        if (splitInfo.mode === 'equal' && splitInfo.totalPeople) {
+            var splitPerPerson = Math.floor(data.amount / splitInfo.totalPeople);
+            splitHtml += '<span class="parse-field-value">Rata ' + splitInfo.totalPeople + ' orang, @ Rp ' + formatCurrency(splitPerPerson) + '</span>';
+        } else if (splitInfo.participants && splitInfo.participants.length > 0) {
+            splitHtml += '<span class="parse-field-value">' + splitInfo.participants.map(function (p) {
+                return escapeHtml(p.person) + ': Rp ' + formatCurrency(p.amount);
+            }).join(', ') + '</span>';
+        } else {
+            splitHtml += '<span class="parse-field-value">Terdeteksi</span>';
+        }
+        splitHtml += '</div>';
+        parseFields.innerHTML += splitHtml;
+    }
 
     parseConfidence.textContent = matchedAccount ? 'Cocok' : 'Review';
     parseConfidence.style.background = matchedAccount ? '#dcfce7' : '#fef3c7';
@@ -1715,6 +2400,33 @@ document.getElementById('btn-apply').addEventListener('click', function () {
         });
         if (match) {
             document.getElementById('tx-account').value = match.id;
+        }
+    }
+
+    // Apply split bill from parsed data
+    if (parsedData.splitBill) {
+        var sb = parsedData.splitBill;
+        document.getElementById('split-bill-enabled').checked = true;
+        document.getElementById('split-bill-body').style.display = '';
+        if (sb.mode === 'equal' && sb.totalPeople) {
+            document.querySelector('input[name="split-mode"][value="equal"]').checked = true;
+            document.getElementById('split-equal-row').style.display = '';
+            document.getElementById('split-custom-row').style.display = 'none';
+            document.getElementById('split-total-people').value = sb.totalPeople;
+            updateEqualSplitSummary();
+        } else if (sb.participants && sb.participants.length > 0) {
+            document.querySelector('input[name="split-mode"][value="custom"]').checked = true;
+            document.getElementById('split-equal-row').style.display = 'none';
+            document.getElementById('split-custom-row').style.display = '';
+            var list = document.getElementById('split-participants-list');
+            list.innerHTML = '';
+            sb.participants.forEach(function (p) {
+                addParticipantRow(p.person || 'Teman');
+                var rows = list.querySelectorAll('.split-participant-row');
+                var lastRow = rows[rows.length - 1];
+                if (p.amount) lastRow.querySelector('.split-part-amount').value = p.amount;
+            });
+            updateCustomSplitSummary();
         }
     }
 

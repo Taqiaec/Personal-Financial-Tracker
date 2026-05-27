@@ -59,6 +59,13 @@ interface ParsedTransaction {
   accountHint: string;
   destAccountHint?: string;
   adminFee?: number;
+  debtType?: string;    // "hutang" | "piutang"
+  debtPerson?: string;  // nama orang
+  splitBill?: {
+    mode: string;       // "equal" | "custom"
+    totalPeople?: number;
+    participants?: Array<{ person: string; amount: number }>;
+  };
 }
 
 async function normalizeAndCreateTransaction(
@@ -66,6 +73,17 @@ async function normalizeAndCreateTransaction(
   parsed: ParsedTransaction,
   accounts: Array<{ bankName: string; id: string }>
 ): Promise<{ desc: string; amount: number; type: string; category: string; date: string; accountName: string }> {
+  // Split bill detection (takes priority over debt)
+  if (parsed.splitBill && (parsed.splitBill.mode === 'equal' || parsed.splitBill.mode === 'custom')) {
+    return await normalizeAndCreateSplitBill(uid, parsed, accounts);
+  }
+
+  // Debt/piutang detection
+  const debtType = (parsed.debtType || '').toLowerCase();
+  if (debtType === 'hutang' || debtType === 'piutang') {
+    return await normalizeAndCreateDebt(uid, parsed, accounts, debtType);
+  }
+
   // Validate & normalize type
   const rawType = parsed.type || '';
   const type = rawType === 'income' ? 'income' : rawType === 'transfer' ? 'transfer' : rawType === 'expense' ? 'expense' : '';
@@ -160,6 +178,148 @@ async function normalizeAndCreateTransaction(
   return { desc, amount, type, category, date, accountName };
 }
 
+async function normalizeAndCreateDebt(
+  uid: string,
+  parsed: ParsedTransaction,
+  accounts: Array<{ bankName: string; id: string }>,
+  debtType: string
+): Promise<{ desc: string; amount: number; type: string; category: string; date: string; accountName: string }> {
+  const person = (parsed.debtPerson || parsed.description || 'Seseorang').trim();
+  const desc = parsed.description || person;
+  const amount = Math.round(Number(parsed.amount)) || 0;
+  const date = parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) && !isNaN(new Date(parsed.date).getTime())
+    ? parsed.date
+    : new Date().toISOString().split('T')[0];
+
+  if (amount <= 0) {
+    throw new Error('Jumlah harus lebih dari 0.');
+  }
+
+  // Match accountHint
+  let accountId = '';
+  let accountName = '';
+  if (parsed.accountHint) {
+    const hint = parsed.accountHint.toLowerCase();
+    const match = accounts.find(a => a.bankName.toLowerCase().includes(hint));
+    if (match) {
+      accountId = match.id;
+      accountName = match.bankName;
+    }
+  }
+
+  await db().collection('users').doc(uid).collection('debts').add({
+    person: person,
+    type: debtType,
+    amount: amount,
+    description: desc,
+    date: date,
+    accountId: accountId,
+    remainingAmount: amount,
+    status: 'pending',
+    payments: [],
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    settledAt: null
+  });
+
+  const typeLabel = debtType === 'hutang' ? 'Hutang' : 'Piutang';
+  return { desc: person + ': ' + desc, amount, type: 'debt', category: typeLabel, date, accountName };
+}
+
+async function normalizeAndCreateSplitBill(
+  uid: string,
+  parsed: ParsedTransaction,
+  accounts: Array<{ bankName: string; id: string }>
+): Promise<{ desc: string; amount: number; type: string; category: string; date: string; accountName: string }> {
+  const totalAmount = Math.round(Number(parsed.amount)) || 0;
+  const desc = parsed.description || '';
+  const date = parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) && !isNaN(new Date(parsed.date).getTime())
+    ? parsed.date
+    : new Date().toISOString().split('T')[0];
+
+  if (totalAmount <= 0) {
+    throw new Error('Jumlah harus lebih dari 0.');
+  }
+
+  // Match accountHint
+  let accountId = '';
+  let accountName = '';
+  if (parsed.accountHint) {
+    const hint = parsed.accountHint.toLowerCase();
+    const match = accounts.find(a => a.bankName.toLowerCase().includes(hint));
+    if (match) {
+      accountId = match.id;
+      accountName = match.bankName;
+    }
+  }
+
+  const splitBill = parsed.splitBill!;
+  let userShare: number;
+  let participants: Array<{ person: string; amount: number }>;
+
+  if (splitBill.mode === 'equal') {
+    const totalPeople = Math.max(2, Math.round(Number(splitBill.totalPeople)) || 2);
+    const perPerson = Math.floor(totalAmount / totalPeople);
+    const remainder = totalAmount - perPerson * totalPeople;
+    userShare = perPerson + remainder;
+    participants = [];
+    for (let i = 1; i < totalPeople; i++) {
+      participants.push({ person: 'Teman ' + i, amount: perPerson });
+    }
+  } else {
+    participants = splitBill.participants || [];
+    const friendsTotal = participants.reduce((sum, p) => sum + (Math.round(Number(p.amount)) || 0), 0);
+    if (friendsTotal > totalAmount) {
+      throw new Error('Jumlah share teman melebihi total transaksi. Periksa kembali nominal patungan.');
+    }
+    userShare = totalAmount - friendsTotal;
+  }
+
+  // Atomic write: expense + debts via Firestore transaction
+  const cats = CATEGORIES.expense;
+  const category = parsed.category && cats.includes(parsed.category) ? parsed.category : cats[cats.length - 1];
+  const validParticipants = participants.filter(p => (Math.round(Number(p.amount)) || 0) > 0);
+
+  await db().runTransaction(async (transaction) => {
+    const expenseRef = db().collection('users').doc(uid).collection('transactions').doc();
+    transaction.set(expenseRef, {
+      desc: desc,
+      amount: userShare,
+      type: 'expense',
+      category: category,
+      date: date,
+      accountId: accountId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    for (const p of validParticipants) {
+      const debtRef = db().collection('users').doc(uid).collection('debts').doc();
+      transaction.set(debtRef, {
+        person: p.person.trim() || 'Teman',
+        type: 'piutang',
+        amount: Math.round(Number(p.amount)) || 0,
+        description: desc,
+        date: date,
+        accountId: '',
+        remainingAmount: Math.round(Number(p.amount)) || 0,
+        status: 'pending',
+        payments: [],
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        settledAt: null
+      });
+    }
+  });
+
+  const totalPiutang = validParticipants.reduce((sum, p) => sum + (Math.round(Number(p.amount)) || 0), 0);
+  return {
+    desc: 'Split: ' + desc + ' (kamu: ' + formatCurrency(userShare) + ', piutang: ' + formatCurrency(totalPiutang) + ')',
+    amount: userShare,
+    type: 'debt',
+    category: '💰 Split / Piutang',
+    date,
+    accountName
+  };
+}
+
 function extractJSON(text: string): any {
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (jsonMatch) return JSON.parse(jsonMatch[0]);
@@ -208,6 +368,12 @@ export async function handlePhoto(chatId: number, photoArray: Array<{ file_id: s
     let typeLabel: string;
     if (result.type === 'transfer') {
       typeLabel = '🔀 Transfer';
+    } else if (result.type === 'debt') {
+      if (result.category && result.category.includes('Split')) {
+        typeLabel = '💰 Split / Piutang';
+      } else {
+        typeLabel = result.category === 'Hutang' ? '💸 Hutang' : '💰 Piutang';
+      }
     } else {
       typeLabel = result.type === 'expense' ? '📤 Pengeluaran' : '📥 Pemasukan';
     }
@@ -257,6 +423,12 @@ export async function handleFreeText(chatId: number, text: string): Promise<void
     let typeLabel: string;
     if (result.type === 'transfer') {
       typeLabel = '🔀 Transfer';
+    } else if (result.type === 'debt') {
+      if (result.category && result.category.includes('Split')) {
+        typeLabel = '💰 Split / Piutang';
+      } else {
+        typeLabel = result.category === 'Hutang' ? '💸 Hutang' : '💰 Piutang';
+      }
     } else {
       typeLabel = result.type === 'expense' ? '📤 Pengeluaran' : '📥 Pemasukan';
     }
@@ -303,6 +475,9 @@ export async function handleStart(chatId: number): Promise<void> {
     '/statistik - Pie chart pengeluaran per kategori\n' +
     '/banding - Banding bulan ini vs bulan lalu\n' +
     '/akun - Daftar akun\n' +
+    '/hutang - Lihat daftar hutang\n' +
+    '/piutang - Lihat daftar piutang\n' +
+    '/bayar &lt;jml&gt; &lt;nama&gt; - Catat pembayaran hutang/piutang\n' +
     '/help - Bantuan';
   await sendMessage(chatId, msg);
 }
@@ -326,7 +501,12 @@ export async function handleHelp(chatId: number): Promise<void> {
     '/banding - Banding pemasukan/pengeluaran bulan ini vs bulan lalu\n' +
     '/saldo - Lihat saldo semua akun\n' +
     '/bulanini - Ringkasan keuangan bulan ini\n' +
-    '/akun - Daftar akun\n\n' +
+    '/akun - Daftar akun\n' +
+    '/hutang - Lihat daftar hutang aktif\n' +
+    '/piutang - Lihat daftar piutang aktif\n' +
+    '/bayar - Catat pembayaran hutang/piutang\n' +
+    '  Format: <code>/bayar [jumlah] [nama] [akun?] [catatan?]</code>\n' +
+    '  Contoh: <code>/bayar 50000 budi bca</code>\n\n' +
     '<b>Format jumlah:</b> Angka bulat tanpa Rp, tanpa titik, tanpa koma.\n' +
     '<b>Format deskripsi:</b> Bebas, maks 5 kata.';
   await sendMessage(chatId, msg);
@@ -371,9 +551,10 @@ export async function handleSaldo(chatId: number): Promise<void> {
   const uid = await getUid(chatId);
   if (!uid) { await sendMessage(chatId, '⚠️ Akun belum dihubungkan. Gunakan /link &lt;kode&gt; dulu.'); return; }
 
-  const [accSnap, txSnap] = await Promise.all([
+  const [accSnap, txSnap, debtSnap] = await Promise.all([
     db().collection('users').doc(uid).collection('accounts').get(),
-    db().collection('users').doc(uid).collection('transactions').get()
+    db().collection('users').doc(uid).collection('transactions').get(),
+    db().collection('users').doc(uid).collection('debts').get()
   ]);
 
   const accounts: Array<{ bankName: string; accountType: string; accountSubType: string; initialBalance: number; currentValue: number | null; id: string }> = [];
@@ -386,6 +567,12 @@ export async function handleSaldo(chatId: number): Promise<void> {
   txSnap.forEach(d => {
     const t = d.data();
     txns.push({ accountId: t.accountId, transferToAccountId: t.transferToAccountId, type: t.type, amount: t.amount });
+  });
+
+  const debts: Array<{ type: string; amount: number; remainingAmount: number; accountId: string; payments: Array<{ amount: number; accountId: string }> }> = [];
+  debtSnap.forEach(d => {
+    const v = d.data();
+    debts.push({ type: v.type, amount: v.amount, remainingAmount: v.remainingAmount != null ? v.remainingAmount : v.amount, accountId: v.accountId || '', payments: v.payments || [] });
   });
 
   let totalBalance = 0;
@@ -408,6 +595,18 @@ export async function handleSaldo(chatId: number): Promise<void> {
           return s + (t.type === 'income' ? t.amount : -t.amount);
         }, 0);
       balance = a.initialBalance + net;
+
+      // Factor in debts
+      debts.forEach(d => {
+        if (d.type === 'piutang' && d.accountId === a.id) {
+          balance -= d.amount;
+        }
+        (d.payments || []).forEach(p => {
+          if (p.accountId === a.id) {
+            balance += (d.type === 'piutang' ? p.amount : -p.amount);
+          }
+        });
+      });
     }
     totalBalance += balance;
     const typeLabel = typeLabels[a.accountType] || a.accountType;
@@ -421,6 +620,16 @@ export async function handleSaldo(chatId: number): Promise<void> {
     lines.push(`• <b>Tanpa Akun</b>: Rp ${formatCurrency(unassignedNet)}`);
   }
   totalBalance += unassignedNet;
+
+  // Debt summary
+  const totalHutang = debts.filter(d => d.type === 'hutang' && d.remainingAmount > 0).reduce((s, d) => s + d.remainingAmount, 0);
+  const totalPiutang = debts.filter(d => d.type === 'piutang' && d.remainingAmount > 0).reduce((s, d) => s + d.remainingAmount, 0);
+  if (totalHutang > 0 || totalPiutang > 0) {
+    const debtLines = [];
+    if (totalPiutang > 0) debtLines.push(`💰 Piutang: Rp ${formatCurrency(totalPiutang)}`);
+    if (totalHutang > 0) debtLines.push(`💸 Hutang: Rp ${formatCurrency(totalHutang)}`);
+    lines.push(`\n<i>${debtLines.join('  |  ')}</i>`);
+  }
 
   const header = '<b>💰 Saldo</b>\n\n';
   const body = lines.length ? lines.join('\n') : 'Belum ada akun atau transaksi.';
@@ -675,9 +884,10 @@ export async function handleAkun(chatId: number): Promise<void> {
   const uid = await getUid(chatId);
   if (!uid) { await sendMessage(chatId, '⚠️ Akun belum dihubungkan. Gunakan /link &lt;kode&gt; dulu.'); return; }
 
-  const [accSnap, txSnap] = await Promise.all([
+  const [accSnap, txSnap, debtSnap] = await Promise.all([
     db().collection('users').doc(uid).collection('accounts').get(),
-    db().collection('users').doc(uid).collection('transactions').get()
+    db().collection('users').doc(uid).collection('transactions').get(),
+    db().collection('users').doc(uid).collection('debts').get()
   ]);
 
   if (accSnap.empty) {
@@ -689,6 +899,12 @@ export async function handleAkun(chatId: number): Promise<void> {
   txSnap.forEach(d => {
     const t = d.data();
     txns.push({ accountId: t.accountId, transferToAccountId: t.transferToAccountId, type: t.type, amount: t.amount });
+  });
+
+  const debts: Array<{ type: string; amount: number; accountId: string; payments: Array<{ amount: number; accountId: string }> }> = [];
+  debtSnap.forEach(d => {
+    const v = d.data();
+    debts.push({ type: v.type, amount: v.amount, accountId: v.accountId || '', payments: v.payments || [] });
   });
 
   const typeLabels: Record<string, string> = { passive: '💳 Pasif', investment: '📈 Investasi' };
@@ -712,6 +928,18 @@ export async function handleAkun(chatId: number): Promise<void> {
           return s + (t.type === 'income' ? t.amount : -t.amount);
         }, 0);
       balance = (a.initialBalance || 0) + net;
+
+      // Factor in debts
+      debts.forEach(dd => {
+        if (dd.type === 'piutang' && dd.accountId === d.id) {
+          balance -= dd.amount;
+        }
+        (dd.payments || []).forEach(p => {
+          if (p.accountId === d.id) {
+            balance += (dd.type === 'piutang' ? p.amount : -p.amount);
+          }
+        });
+      });
     }
     const typeLabel = typeLabels[accountType] || accountType;
     const subTypeLine = a.accountSubType ? ` (${a.accountSubType})` : '';
@@ -754,31 +982,7 @@ export async function handleTransfer(chatId: number, text: string): Promise<void
     return;
   }
 
-  // Parse amount (supports slang: 5rb, 50k, 5jt, goban, etc.)
-  const amountStr = beforeParts[0].toLowerCase();
-  let amount = 0;
-  if (/^\d+$/.test(amountStr)) {
-    amount = parseInt(amountStr, 10);
-  } else {
-    // Slang parsing
-    const slang: Record<string, number> = {
-      goceng: 5000, goban: 50000, ceban: 10000, ceceng: 100000,
-      gopek: 500, seceng: 1000, noceng: 2000, saceng: 3000
-    };
-    if (slang[amountStr]) {
-      amount = slang[amountStr];
-    } else {
-      const match = amountStr.match(/^(\d+(?:\.?\d+)?)\s*(rb|k|jt|m|juta)?$/);
-      if (match) {
-        amount = parseFloat(match[1]) || 0;
-        if (match[2]) {
-          if (match[2] === 'jt' || match[2] === 'juta' || match[2] === 'm') amount *= 1000000;
-          else amount *= 1000;
-        }
-      }
-    }
-  }
-
+  const amount = parseAmount(beforeParts[0]);
   if (amount <= 0) {
     await sendMessage(chatId, '❌ Jumlah tidak valid. Contoh: <code>/transfer 100000 bca ke mandiri</code>');
     return;
@@ -843,5 +1047,217 @@ export async function handleTransfer(chatId: number, text: string): Promise<void
     `Jumlah: Rp ${formatCurrency(amount)}\n` +
     `Deskripsi: ${escapeHtml(desc)}\n` +
     `Tanggal: ${today}`
+  );
+}
+
+// === AMOUNT PARSING (shared between /transfer and /bayar) ===
+function parseAmount(raw: string): number {
+  const s = raw.toLowerCase();
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+
+  const slang: Record<string, number> = {
+    goceng: 5000, goban: 50000, ceban: 10000, ceceng: 100000,
+    gopek: 500, seceng: 1000, noceng: 2000, saceng: 3000
+  };
+  if (slang[s]) return slang[s];
+
+  const match = s.match(/^(\d+(?:\.?\d+)?)\s*(rb|k|jt|m|juta)?$/);
+  if (match) {
+    let val = parseFloat(match[1]) || 0;
+    if (match[2]) {
+      if (match[2] === 'jt' || match[2] === 'juta' || match[2] === 'm') val *= 1000000;
+      else val *= 1000;
+    }
+    return val;
+  }
+
+  return 0;
+}
+
+// === HUTANG / PIUTANG ===
+export async function handleHutang(chatId: number): Promise<void> {
+  const uid = await getUid(chatId);
+  if (!uid) { await sendMessage(chatId, '⚠️ Akun belum dihubungkan.'); return; }
+
+  const debtSnap = await db().collection('users').doc(uid).collection('debts')
+    .where('type', '==', 'hutang')
+    .where('status', '!=', 'paid')
+    .get();
+
+  if (debtSnap.empty) {
+    await sendMessage(chatId, '📭 Tidak ada hutang aktif. 🎉');
+    return;
+  }
+
+  let total = 0;
+  const lines: string[] = [];
+  debtSnap.forEach(d => {
+    const v = d.data();
+    const remaining = v.remainingAmount != null ? v.remainingAmount : v.amount;
+    total += remaining;
+    const icon = v.status === 'partial' ? '🔄' : '⏳';
+    const paidInfo = (v.payments && v.payments.length > 0)
+      ? ` (dibayar: Rp ${formatCurrency(v.amount - remaining)})`
+      : '';
+    lines.push(`${icon} <b>${escapeHtml(v.person)}</b>: Rp ${formatCurrency(v.amount)} | Sisa: <b>Rp ${formatCurrency(remaining)}</b>${paidInfo}\n  ${escapeHtml(v.description || '')} · ${v.date}`);
+  });
+
+  await sendMessage(chatId,
+    '<b>💸 Daftar Hutang</b>\n\n' +
+    lines.join('\n\n') +
+    `\n\n<b>Total Hutang: Rp ${formatCurrency(total)}</b>`
+  );
+}
+
+export async function handlePiutang(chatId: number): Promise<void> {
+  const uid = await getUid(chatId);
+  if (!uid) { await sendMessage(chatId, '⚠️ Akun belum dihubungkan.'); return; }
+
+  const debtSnap = await db().collection('users').doc(uid).collection('debts')
+    .where('type', '==', 'piutang')
+    .where('status', '!=', 'paid')
+    .get();
+
+  if (debtSnap.empty) {
+    await sendMessage(chatId, '📭 Tidak ada piutang aktif. 🎉');
+    return;
+  }
+
+  let total = 0;
+  const lines: string[] = [];
+  debtSnap.forEach(d => {
+    const v = d.data();
+    const remaining = v.remainingAmount != null ? v.remainingAmount : v.amount;
+    total += remaining;
+    const icon = v.status === 'partial' ? '🔄' : '⏳';
+    const paidInfo = (v.payments && v.payments.length > 0)
+      ? ` (sudah bayar: Rp ${formatCurrency(v.amount - remaining)})`
+      : '';
+    lines.push(`${icon} <b>${escapeHtml(v.person)}</b>: Rp ${formatCurrency(v.amount)} | Sisa: <b>Rp ${formatCurrency(remaining)}</b>${paidInfo}\n  ${escapeHtml(v.description || '')} · ${v.date}`);
+  });
+
+  await sendMessage(chatId,
+    '<b>💰 Daftar Piutang</b>\n\n' +
+    lines.join('\n\n') +
+    `\n\n<b>Total Piutang: Rp ${formatCurrency(total)}</b>`
+  );
+}
+
+export async function handleBayar(chatId: number, text: string): Promise<void> {
+  const uid = await getUid(chatId);
+  if (!uid) { await sendMessage(chatId, '⚠️ Akun belum dihubungkan.'); return; }
+
+  const body = text.replace(/^\/bayar\s+/, '').trim();
+  if (!body) {
+    await sendMessage(chatId,
+      '❌ Format: <code>/bayar [jumlah] [nama] [akun?] [catatan?]</code>\n\n' +
+      'Contoh:\n' +
+      '• <code>/bayar 50000 budi</code>\n' +
+      '• <code>/bayar 100k ani bca bayar pinjaman</code>'
+    );
+    return;
+  }
+
+  const parts = body.split(/\s+/);
+  if (parts.length < 2) {
+    await sendMessage(chatId, '❌ Minimal sebutkan jumlah dan nama. Contoh: <code>/bayar 50000 budi</code>');
+    return;
+  }
+
+  const amount = parseAmount(parts[0]);
+  if (amount <= 0) {
+    await sendMessage(chatId, '❌ Jumlah tidak valid. Contoh: <code>/bayar 50000 budi</code>');
+    return;
+  }
+
+  const personHint = parts[1].toLowerCase();
+  const date = new Date().toISOString().split('T')[0];
+
+  // Fetch active debts
+  const debtSnap = await db().collection('users').doc(uid).collection('debts')
+    .where('status', '!=', 'paid')
+    .get();
+
+  const matches: Array<{ id: string; data: any }> = [];
+  debtSnap.forEach(d => {
+    const v = d.data();
+    if (v.person.toLowerCase().includes(personHint)) {
+      matches.push({ id: d.id, data: v });
+    }
+  });
+
+  if (matches.length === 0) {
+    await sendMessage(chatId, `❌ Tidak ditemukan hutang/piutang aktif untuk "${parts[1]}".`);
+    return;
+  }
+
+  const match = matches[0];
+  const debt = match.data;
+
+  // Try to match account from remaining parts
+  const remainingText = parts.slice(2).join(' ').toLowerCase();
+  let accountId = debt.accountId || '';
+  let accountName = '';
+  if (remainingText || debt.accountId) {
+    const accSnap = await db().collection('users').doc(uid).collection('accounts').get();
+    const accounts: Array<{ bankName: string; id: string }> = [];
+    accSnap.forEach(a => { const d = a.data(); accounts.push({ bankName: d.bankName, id: a.id }); });
+
+    for (const a of accounts) {
+      if (remainingText && remainingText.includes(a.bankName.toLowerCase())) {
+        accountId = a.id;
+        accountName = a.bankName;
+        break;
+      }
+    }
+    if (!accountName && debt.accountId) {
+      const linkedAcc = accounts.find(a => a.id === debt.accountId);
+      if (linkedAcc) { accountId = linkedAcc.id; accountName = linkedAcc.bankName; }
+    }
+  }
+
+  // Build note from remainingText (minus matched account name)
+  let note = remainingText || '';
+  if (accountName && note.includes(accountName.toLowerCase())) {
+    note = note.replace(new RegExp('\\b' + accountName.toLowerCase() + '\\b', 'i'), '').trim();
+  }
+
+  // Append payment
+  const payments = (debt.payments || []).slice();
+  payments.push({
+    amount: amount,
+    date: date,
+    accountId: accountId,
+    note: note,
+    createdAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  const totalPaid = payments.reduce((s: number, p: any) => s + p.amount, 0);
+  const remaining = Math.max(0, debt.amount - totalPaid);
+  let status: string;
+  if (remaining <= 0) status = 'paid';
+  else if (payments.length > 0) status = 'partial';
+  else status = 'pending';
+
+  const updateData: any = {
+    payments: payments,
+    remainingAmount: remaining,
+    status: status
+  };
+  if (status === 'paid') {
+    updateData.settledAt = admin.firestore.FieldValue.serverTimestamp();
+  }
+
+  await db().collection('users').doc(uid).collection('debts').doc(match.id).update(updateData);
+
+  const typeLabel = debt.type === 'hutang' ? 'Hutang' : 'Piutang';
+  const remainingLine = remaining > 0 ? `\nSisa: Rp ${formatCurrency(remaining)}` : '';
+  await sendMessage(chatId,
+    `✅ <b>Pembayaran dicatat!</b>\n\n` +
+    `${typeLabel}: ${escapeHtml(debt.person)}\n` +
+    `Jumlah: Rp ${formatCurrency(amount)}\n` +
+    (accountName ? `Akun: ${accountName}\n` : '') +
+    `Status: ${status === 'paid' ? '✅ Lunas' : status === 'partial' ? '🔄 Cicilan' : '⏳ Pending'}` +
+    remainingLine
   );
 }
