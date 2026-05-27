@@ -30,7 +30,28 @@ export async function callGeminiAPI(parts: Part[]): Promise<string> {
   }
 
   const result: any = await response.json();
-  return result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+  // Check for safety filter blocking the prompt itself
+  if (result.promptFeedback?.blockReason) {
+    throw new Error('Foto tidak dapat diproses (filter: ' + result.promptFeedback.blockReason + '). Coba foto lain.');
+  }
+
+  const candidate = result.candidates?.[0];
+  if (!candidate) {
+    throw new Error('Tidak ada respons dari AI. Kemungkinan foto tidak terbaca atau terblokir filter.');
+  }
+
+  // Check for safety filter blocking the response
+  if (candidate.finishReason === 'SAFETY') {
+    throw new Error('Foto tidak dapat diproses (safety filter). Coba foto lain.');
+  }
+
+  const text = candidate?.content?.parts?.[0]?.text;
+  if (!text) {
+    throw new Error('AI tidak menghasilkan teks. Kemungkinan foto tidak dapat dibaca. Pastikan foto jelas dan mengandung teks transaksi.');
+  }
+
+  return text;
 }
 
 // Auth-gated callable for frontend receipt scanning

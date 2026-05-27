@@ -29,10 +29,10 @@ Personal finance tracker — SPA hosted on Firebase with a Telegram bot companio
 |---|---|
 | `functions/src/index.ts` | Entry point: `telegramWebhook` (onRequest) receives Telegram updates, routes to command handlers. Re-exports `callGemini`, `dailyRecap`, `weeklyRecap`. Uses secrets: `TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`. |
 | `functions/src/commands.ts` | Telegram bot handlers: `/start`, `/help`, `/link`, `/saldo`, `/tambah`, `/pemasukan`, `/transfer`, `/bulanini`, `/statistik`, `/banding`, `/akun`. Also `handlePhoto()` (receipt scan with caption), `handleFreeText()` (natural language input), `normalizeAndCreateTransaction()` (shared create logic, handles income/expense/transfer + admin fee). All in Bahasa Indonesia. Uses Admin SDK (bypasses Firestore rules). |
-| `functions/src/telegram.ts` | `sendMessage(chatId, text, parseMode)` — calls Telegram Bot API via `fetch()`. `downloadPhotoAsBase64(fileId)` — downloads photo from Telegram servers. `escapeHtml()` for HTML-safe output. |
-| `functions/src/gemini.ts` | `callGemini` (onCall) — auth-gated proxy to Gemini 2.5 Flash for receipt scanning. `callGeminiAPI(parts)` — reusable API caller used by bot handlers. `buildScanPrompt()` and `buildNaturalLanguagePrompt()` with Indonesian category descriptions, few-shot examples, and transfer detection. Uses secret: `GEMINI_API_KEY`. |
+| `functions/src/telegram.ts` | `sendMessage(chatId, text, parseMode)` — calls Telegram Bot API via `fetch()`. `downloadPhotoAsBase64(fileId)` — downloads photo from Telegram servers (no resize). `downloadAndResizePhoto(fileId, maxDim?)` — downloads + resizes via `sharp` (max 1200px, 80% JPEG) before base64 encoding, used by `handlePhoto` to keep Gemini payload small. `escapeHtml()` for HTML-safe output. |
+| `functions/src/gemini.ts` | `callGemini` (onCall) — auth-gated proxy to Gemini 2.5 Flash for receipt scanning. `callGeminiAPI(parts)` — reusable API caller used by bot handlers. Detects safety filter blocks (`promptFeedback.blockReason`, `finishReason: SAFETY`), empty candidates, and empty text responses — throws descriptive errors in Indonesian for each case. `buildScanPrompt()` and `buildNaturalLanguagePrompt()` with Indonesian category descriptions, few-shot examples, and transfer detection. Uses secret: `GEMINI_API_KEY`. |
 | `functions/src/scheduler.ts` | `dailyRecap` (every day 9pm WIB) and `weeklyRecap` (Sunday 9pm WIB) — PubSub scheduled functions. Query all linked Telegram users, summarize transactions, send recap messages. |
-| `functions/package.json` | Dependencies: `firebase-admin@^12`, `firebase-functions@^5`. Build: `tsc`. |
+| `functions/package.json` | Dependencies: `firebase-admin@^12`, `firebase-functions@^5`, `sharp@^0.34`. Build: `tsc`. |
 | `functions/tsconfig.json` | Target ES2020, module commonjs, outDir `lib`, rootDir `src`. |
 
 ## Data layer (Firestore)
@@ -113,7 +113,7 @@ Custom Canvas 2D at 2x HiDPI via `window.devicePixelRatio`. No Chart.js.
 On `#page-add`. Two paths:
 
 1. **Image upload** (web): User uploads receipt → `firebase.functions().httpsCallable('callGemini')` → Gemini 2.5 Flash scans image.
-2. **Photo message** (Telegram): User sends photo to bot → `handlePhoto()` downloads via `downloadPhotoAsBase64()` → calls `callGeminiAPI()` with `buildScanPrompt()`. Caption passed as hint — enables transfer detection from photo + caption combo.
+2. **Photo message** (Telegram): User sends photo to bot → `handlePhoto()` downloads + resizes via `downloadAndResizePhoto()` (max 1200px, 80% JPEG via `sharp`) → calls `callGeminiAPI()` with `buildScanPrompt()`. Caption passed as hint — enables transfer detection from photo + caption combo. No resize on web path (already done client-side).
 
 - **Image handling**: File input + drag-and-drop on `.upload-zone`. JPG/PNG/WebP. Auto-resize >3.9MB base64 (canvas max 1200px, 80% JPEG). Clipboard paste supported.
 - **Response parsing**: `extractJSON()` (regex), `normalizeResult()` (validates category against `CATEGORIES`, coerces type, validates date).
@@ -126,7 +126,7 @@ Bot: [@Fintracker_Takii_Bot](https://t.me/Fintracker_Takii_Bot). Webhook: `teleg
 **Linking flow**: Web app generates 6-digit code → writes to `telegramLinkCodes/{code}` → user sends `/link CODE` to bot → bot validates expiry, saves mapping to `telegramUsers/{chatId}`, deletes code.
 
 **Message routing** (in order):
-1. Photo → `handlePhoto(chatId, photoArray, caption?)` — downloads, scans with Gemini, creates transaction. Caption (if present) passed as hint to Gemini for better accuracy.
+1. Photo → `handlePhoto(chatId, photoArray, caption?)` — downloads + resizes via `sharp`, scans with Gemini, creates transaction. Caption (if present) prepended to Gemini prompt as hint. Error message now includes actual failure detail (safety filter, empty response, etc.) instead of generic message.
 2. Text starting with `/` → command routing
 3. Other text → `handleFreeText()` — natural language input via Gemini (supports Indonesian slang: goceng=5000, goban=50000, ceban=10000, ceceng=100000, etc.). Detects transfer intent ("transfer 100rb bca ke mandiri", "pindahin 50k gopay ke ovo") and creates transfer + optional admin fee.
 

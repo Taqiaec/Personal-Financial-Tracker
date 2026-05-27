@@ -1,6 +1,8 @@
 // Telegram Bot API helper — lightweight, no library dependency
 // Uses fetch() which is available in Node 20+
 
+import sharp from 'sharp';
+
 const TELEGRAM_API = 'https://api.telegram.org';
 
 export function getToken(): string {
@@ -60,6 +62,37 @@ export async function downloadPhotoAsBase64(fileId: string): Promise<{ base64: s
   const mediaType = mimeMap[ext] || 'image/jpeg';
 
   return { base64, mediaType };
+}
+
+export async function downloadAndResizePhoto(fileId: string, maxDim: number = 1200): Promise<{ base64: string; mediaType: string }> {
+  const token = getToken();
+  if (!token) throw new Error('TELEGRAM_BOT_TOKEN not configured');
+
+  const getFileRes = await fetch(`${TELEGRAM_API}/bot${token}/getFile?file_id=${encodeURIComponent(fileId)}`);
+  if (!getFileRes.ok) {
+    const err: any = await getFileRes.json().catch(() => ({}));
+    throw new Error('Telegram getFile error: ' + (err.description || getFileRes.status));
+  }
+  const fileData: any = await getFileRes.json();
+  const filePath = fileData.result?.file_path;
+  if (!filePath) throw new Error('No file_path in getFile response');
+
+  const downloadRes = await fetch(`${TELEGRAM_API}/file/bot${token}/${filePath}`);
+  if (!downloadRes.ok) throw new Error('Telegram file download error: ' + downloadRes.status);
+
+  const buffer = Buffer.from(await downloadRes.arrayBuffer());
+
+  // Resize image to reduce payload size for Gemini API
+  const image = sharp(buffer);
+  const metadata = await image.metadata();
+  const w = metadata.width || 0;
+  const h = metadata.height || 0;
+  if (w > maxDim || h > maxDim) {
+    image.resize(maxDim, maxDim, { fit: 'inside' });
+  }
+  const resizedBuffer = await image.jpeg({ quality: 80 }).toBuffer();
+
+  return { base64: resizedBuffer.toString('base64'), mediaType: 'image/jpeg' };
 }
 
 export function escapeHtml(text: string): string {

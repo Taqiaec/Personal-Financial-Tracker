@@ -1,5 +1,5 @@
 import * as admin from 'firebase-admin';
-import { sendMessage, escapeHtml, downloadPhotoAsBase64 } from './telegram';
+import { sendMessage, escapeHtml, downloadAndResizePhoto } from './telegram';
 import { callGeminiAPI, buildScanPrompt, buildNaturalLanguagePrompt } from './gemini';
 
 const CATEGORIES = {
@@ -178,8 +178,8 @@ export async function handlePhoto(chatId: number, photoArray: Array<{ file_id: s
     // Get largest photo (last in array)
     const photo = photoArray[photoArray.length - 1];
 
-    // Download + convert to base64
-    const { base64, mediaType } = await downloadPhotoAsBase64(photo.file_id);
+    // Download + resize + convert to base64
+    const { base64, mediaType } = await downloadAndResizePhoto(photo.file_id);
 
     // Fetch user's accounts for context
     const accSnap = await db().collection('users').doc(uid).collection('accounts').get();
@@ -223,7 +223,11 @@ export async function handlePhoto(chatId: number, photoArray: Array<{ file_id: s
     );
   } catch (err: any) {
     console.error('handlePhoto error:', err);
-    await sendMessage(chatId, '❌ Gagal membaca foto. Pastikan foto struk/nota terlihat jelas. Coba lagi atau gunakan /tambah untuk input manual.');
+    const errMsg = err.message || String(err);
+    await sendMessage(chatId,
+      '❌ Gagal membaca foto: <i>' + escapeHtml(errMsg) + '</i>\n\n' +
+      'Coba lagi atau gunakan /tambah untuk input manual.'
+    );
   }
 }
 
