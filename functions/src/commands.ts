@@ -175,6 +175,20 @@ async function normalizeAndCreateTransaction(
     createdAt: admin.firestore.FieldValue.serverTimestamp()
   });
 
+  // Create admin fee expense if specified (for non-transfer types too)
+  const fee = Math.round(Number(parsed.adminFee || 0)) || 0;
+  if (fee > 0) {
+    await db().collection('users').doc(uid).collection('transactions').add({
+      desc: 'Biaya Admin: ' + desc,
+      amount: fee,
+      type: 'expense',
+      category: 'Lainnya',
+      date: date,
+      accountId: accountId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  }
+
   return { desc, amount, type, category, date, accountName };
 }
 
@@ -357,7 +371,7 @@ export async function handlePhoto(chatId: number, photoArray: Array<{ file_id: s
       { text: prompt }
     ];
     if (caption && caption.trim()) {
-      parts.unshift({ text: 'Caption pengguna: ' + caption.trim() + '\n\nGunakan caption ini sebagai petunjuk tambahan untuk deskripsi, jumlah, kategori, dan tipe transaksi.' });
+      parts.unshift({ text: 'Caption pengguna: ' + caption.trim() + '\n\nCaption adalah PETUNJUK UTAMA untuk TUJUAN transaksi. Gambar hanya untuk mengkonfirmasi nominal dan akun. Jika caption menyebutkan pengeluaran ("gojek", "beli", "makan", dll) — type HARUS "expense" sesuai caption, meskipun gambar terlihat seperti transfer. Deskripsi, kategori, dan tipe transaksi IKUTI CAPTION.' });
     }
     const text = await callGeminiAPI(parts);
 
