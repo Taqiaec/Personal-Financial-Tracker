@@ -842,6 +842,7 @@ main.container { padding: 32px 24px 80px; }
 
 .badge-passive    { background: #ccfbf1; color: #0f766e; }
 .badge-investment { background: #e0e7ff; color: #4338ca; }
+.badge-credit     { background: #fff7ed; color: #c2410c; }
 .badge-unassigned { background: #f1f5f9; color: #64748b; }
 
 .account-card.type-unassigned::before { background: #94a3b8; }
@@ -2317,6 +2318,203 @@ main.container { padding: 32px 24px 80px; }
 }
 
 /* === RESPONSIVE === */
+/* === CREDIT ACCOUNT STYLES === */
+.account-card.type-credit::before { background: #f97316; }
+
+/* Credit mode badges */
+.badge-credit-mode {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-size: .68rem;
+    font-weight: 600;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+.badge-mode-revolving  { background: #fff7ed; color: #c2410c; }
+.badge-mode-installment { background: #e0e7ff; color: #4338ca; }
+
+/* Due date badge */
+.due-date-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: .7rem;
+    font-weight: 600;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+.due-date-badge.due-past { background: #fecaca; color: #991b1b; }
+.due-date-badge.due-soon { background: #fef3c7; color: #92400e; }
+.due-date-badge.due-ok   { background: #d1fae5; color: #065f46; }
+
+/* Lunas badge */
+.badge-lunas {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: .7rem;
+    font-weight: 700;
+    background: #d1fae5;
+    color: #065f46;
+}
+
+/* Credit balance negative coloring */
+.credit-balance { color: var(--expense); }
+
+/* Credit progress section (inside account cards) */
+.credit-progress-section {
+    margin: 8px 0 4px;
+}
+.credit-progress-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: .76rem;
+    color: var(--text-muted);
+    margin-bottom: 3px;
+}
+.credit-progress-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 3px;
+    font-size: .72rem;
+    color: var(--text-muted);
+}
+.credit-progress-pct {
+    font-weight: 600;
+    color: var(--text);
+}
+.credit-available-info { color: var(--text-muted); }
+.credit-min-payment { color: var(--expense); font-weight: 600; }
+.credit-installment-info { color: var(--text-muted); }
+
+/* Dashboard bottom row: credit + simulasi side-by-side */
+.dash-bottom-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-top: 24px;
+    align-items: start;
+}
+
+/* Credit summary section (dashboard) */
+.credit-summary-section {
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    box-shadow: var(--shadow-sm);
+}
+.credit-summary-section h3 {
+    font-size: .95rem;
+    font-weight: 700;
+    margin-bottom: 14px;
+    color: var(--text);
+    letter-spacing: -.2px;
+}
+.credit-summary-total {
+    margin-bottom: 14px;
+    font-size: .9rem;
+    color: var(--text-muted);
+    padding: 8px 12px;
+    background: var(--bg);
+    border-radius: var(--radius-md);
+}
+
+/* Credit items (dashboard list) */
+.credit-item {
+    padding: 12px;
+    margin-bottom: 8px;
+    background: var(--bg);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+}
+.credit-item:last-child { margin-bottom: 0; }
+.credit-item-header {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+.credit-item-name {
+    font-weight: 600;
+    font-size: .88rem;
+    color: var(--text);
+    flex: 1;
+}
+.credit-item-balance {
+    font-size: .9rem;
+    font-weight: 700;
+    display: block;
+    margin-bottom: 8px;
+}
+
+/* === SIMULASI KREDIT === */
+.simulasi-section {
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    box-shadow: var(--shadow-sm);
+}
+.simulasi-section h3 {
+    font-size: .95rem;
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: var(--text);
+    letter-spacing: -.2px;
+}
+.simulasi-section .settings-hint {
+    margin-bottom: 12px;
+    font-size: .78rem;
+}
+.simulasi-section .form-group { margin-bottom: 10px; }
+.simulasi-section .form-group label { font-size: .78rem; }
+.simulasi-section .form-group input,
+.simulasi-section .form-group select { font-size: .85rem; }
+.sim-result-card {
+    background: var(--bg);
+    border-radius: var(--radius-md);
+    padding: 16px;
+}
+.sim-result-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    font-size: .88rem;
+    border-bottom: 1px solid var(--border);
+}
+.sim-result-row:last-child { border-bottom: none; }
+.sim-val-primary { color: var(--primary); font-weight: 700; font-size: 1rem; }
+.sim-val-warn    { color: #dc2626; font-weight: 600; }
+.sim-val-bold    { font-weight: 700; color: var(--text); }
+.sim-amort-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.sim-amort-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .78rem;
+    white-space: nowrap;
+}
+.sim-amort-table thead { background: var(--bg); }
+.sim-amort-table th {
+    padding: 8px 10px;
+    text-align: right;
+    font-weight: 600;
+    color: var(--text-muted);
+    border-bottom: 2px solid var(--border);
+}
+.sim-amort-table th:first-child { text-align: center; }
+.sim-amort-table td {
+    padding: 7px 10px;
+    text-align: right;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+}
+.sim-amort-table td:first-child { text-align: center; font-weight: 600; color: var(--text-muted); }
+
 @media (max-width: 700px) {
     .container { padding: 0 12px; }
     main.container { padding: 16px 12px 80px; }
@@ -2387,6 +2585,9 @@ main.container { padding: 32px 24px 80px; }
     /* --- CHARTS --- */
     .charts-row     { grid-template-columns: 1fr; }
     .chart-card { padding: 16px; }
+
+    /* --- DASHBOARD BOTTOM ROW --- */
+    .dash-bottom-row { grid-template-columns: 1fr; }
 
     /* --- SETTINGS --- */
     .btn-settings-toggle { font-size: .82rem; padding: 10px 14px; }

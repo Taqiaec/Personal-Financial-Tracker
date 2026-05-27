@@ -173,9 +173,45 @@ export function buildNaturalLanguagePrompt(
     '   - "cash"/"tunai"→akun yang mengandung "cash", "bca"→akun yang mengandung "BCA", dll\n' +
     '   - Untuk transfer: accountHint = akun asal, destAccountHint = akun tujuan\n' +
     '   - Jika tidak ada penyebutan akun sama sekali → string kosong ""\n\n' +
+    '5b. AKUN KREDIT (Kartu Kredit, PayLater, Cicilan, KPR):\n' +
+    '   - Beberapa akun pengguna bertipe KREDIT. Akun kredit adalah utang/kewajiban.\n' +
+    '   - Kata kunci PEMBAYARAN KREDIT: "bayar CC", "bayar kartu kredit", "bayar paylater",\n' +
+    '     "bayar cicilan", "cicilan", "nyicil", "bayar KPR", "bayar kendaraan"\n' +
+    '   - Jika terdeteksi "bayar [akun kredit]" → TRANSFER dari akun pasif ke akun kredit.\n' +
+    '     accountHint = akun pasif (asal dana), destAccountHint = akun kredit (tujuan)\n' +
+    '     Contoh: "bayar kartu kredit BCA 500rb dari Mandiri"\n' +
+    '     → type: "transfer", accountHint: "Mandiri", destAccountHint: "BCA", amount: 500000\n' +
+    '   - Jika pengeluaran dengan kartu kredit (bukan pembayaran):\n' +
+    '     Contoh: "beli sepatu 200rb pake kartu kredit BCA" → type: "expense", accountHint: "BCA"\n\n' +
     '6. TANGGAL:\n' +
     '   - Selalu gunakan tanggal hari ini: ' + today + '\n' +
     '   - Format: YYYY-MM-DD\n\n' +
+    '7. AKUN BARU (deteksi pembuatan akun):\n' +
+    '   Jika pengguna ingin MEMBUAT AKUN BARU (bukan mencatat transaksi):\n' +
+    '   Kata kunci: "bikin akun", "buat akun", "tambah akun", "akun baru", "buka akun", "daftar akun", "register akun"\n\n' +
+    '   Isi field newAccount dengan objek:\n' +
+    '   {\n' +
+    '     "bankName": "nama bank/akun (contoh: BCA, GoPay, KPR Mandiri)",\n' +
+    '     "accountType": "passive" | "investment" | "credit",\n' +
+    '     "accountSubType": "sub tipe",\n' +
+    '     "initialBalance": saldo_awal (angka),\n' +
+    '     // Kredit-specific (hanya jika accountType = "credit"):\n' +
+    '     "interestRate": suku_bunga_tahunan_persen,\n' +
+    '     // Revolving:\n' +
+    '     "creditLimit": limit_kredit,\n' +
+    '     "dueDate": tanggal_jatuh_tempo (1-28),\n' +
+    '     "minimumPaymentRate": persen_minimal_bayar (default 10),\n' +
+    '     // Cicilan:\n' +
+    '     "totalLoan": total_pinjaman,\n' +
+    '     "tenorMonths": tenor_bulan,\n' +
+    '     "monthlyInstallment": cicilan_per_bulan,\n' +
+    '     "startDate": "YYYY-MM-DD"\n' +
+    '   }\n\n' +
+    '   Sub tipe akun:\n' +
+    '   - Pasif: Spending, Tabungan, Payroll\n' +
+    '   - Investasi: Reksadana, Emas, Saham DN, Saham LN\n' +
+    '   - Kredit: Revolving, Cicilan\n\n' +
+    '   JIKA TIDAK ADA maksud membuat akun baru, set "newAccount" ke null.\n\n' +
     'Kembalikan HANYA JSON valid tanpa teks pembuka, penutup, atau markdown:\n' +
     '{\n' +
     '  "description": "Deskripsi yang sudah dinormalisasi",\n' +
@@ -188,7 +224,8 @@ export function buildNaturalLanguagePrompt(
     '  "adminFee": 0,\n' +
     '  "debtType": "",\n' +
     '  "debtPerson": "",\n' +
-    '  "splitBill": null\n' +
+    '  "splitBill": null,\n' +
+    '  "newAccount": null\n' +
     '}\n\n' +
     'CATATAN:\n' +
     '- destAccountHint hanya diisi jika type = "transfer"\n' +
@@ -196,7 +233,8 @@ export function buildNaturalLanguagePrompt(
     '- debtType dan debtPerson hanya diisi jika terdeteksi hutang/piutang\n' +
     '- splitBill hanya diisi jika terdeteksi patungan/split bill, isi null untuk transaksi biasa\n' +
     '- splitBill dan debtType/debtPerson bersifat MUTUALLY EXCLUSIVE. Jika split bill terdeteksi, set debtType = "" dan debtPerson = "". Jika hutang/piutang terdeteksi, set splitBill = null.\n' +
-    '- Untuk transaksi biasa, isi destAccountHint = "", adminFee = 0, debtType = "", debtPerson = "", splitBill = null\n\n' +
+    '- newAccount hanya diisi jika pengguna ingin MEMBUAT AKUN BARU. Isi null untuk transaksi biasa.\n' +
+    '- Untuk transaksi biasa, isi destAccountHint = "", adminFee = 0, debtType = "", debtPerson = "", splitBill = null, newAccount = null\n\n' +
     'CONTOH PARSING YANG BENAR:\n\n' +
     'Input: "nasgor goceng cash"\n' +
     '→ {"description": "Nasi Goreng", "amount": 5000, "type": "expense", "category": "Makanan", "date": "' + today + '", "accountHint": "Cash", "destAccountHint": "", "adminFee": 0}\n\n' +
@@ -229,5 +267,16 @@ export function buildNaturalLanguagePrompt(
     'Input: "cheeseburger 30k cola 10k sundae 15k, gw cheeseburger falah cola falih sundae"\n' +
     '→ {"description": "Split Bill McD", "amount": 55000, "type": "expense", "category": "Makanan", "date": "' + today + '", "accountHint": "", "destAccountHint": "", "adminFee": 0, "debtType": "", "debtPerson": "", "splitBill": { "mode": "custom", "participants": [{ "person": "falah", "amount": 10000 }, { "person": "falih", "amount": 15000 }] }}\n\n' +
     'Input: "topup gopay 20k admin 1k"\n' +
-    '→ {"description": "Top Up GoPay", "amount": 20000, "type": "expense", "category": "Transportasi", "date": "' + today + '", "accountHint": "", "destAccountHint": "", "adminFee": 1000, "debtType": "", "debtPerson": "", "splitBill": null}';
+    '→ {"description": "Top Up GoPay", "amount": 20000, "type": "expense", "category": "Transportasi", "date": "' + today + '", "accountHint": "", "destAccountHint": "", "adminFee": 1000, "debtType": "", "debtPerson": "", "splitBill": null, "newAccount": null}\n\n' +
+    'CONTOH PEMBUATAN AKUN BARU — perhatikan: type="expense", category="Lainnya", amount=0:\n\n' +
+    'Input: "bikin akun BCA spending 5jt"\n' +
+    '→ {"description": "", "amount": 0, "type": "expense", "category": "Lainnya", "date": "' + today + '", "accountHint": "", "destAccountHint": "", "adminFee": 0, "debtType": "", "debtPerson": "", "splitBill": null, "newAccount": {"bankName": "BCA", "accountType": "passive", "accountSubType": "Spending", "initialBalance": 5000000}}\n\n' +
+    'Input: "buat akun kartu kredit Mandiri limit 10jt bunga 24% jatuh tempo tgl 15"\n' +
+    '→ {"description": "", "amount": 0, "type": "expense", "category": "Lainnya", "date": "' + today + '", "accountHint": "", "destAccountHint": "", "adminFee": 0, "debtType": "", "debtPerson": "", "splitBill": null, "newAccount": {"bankName": "Mandiri CC", "accountType": "credit", "accountSubType": "Revolving", "initialBalance": 0, "interestRate": 24, "creditLimit": 10000000, "dueDate": 15, "minimumPaymentRate": 10}}\n\n' +
+    'Input: "tambah akun cicilan KPR 500jt bunga 12% tenor 20 tahun"\n' +
+    '→ {"description": "", "amount": 0, "type": "expense", "category": "Lainnya", "date": "' + today + '", "accountHint": "", "destAccountHint": "", "adminFee": 0, "debtType": "", "debtPerson": "", "splitBill": null, "newAccount": {"bankName": "KPR", "accountType": "credit", "accountSubType": "Cicilan", "initialBalance": 0, "interestRate": 12, "totalLoan": 500000000, "tenorMonths": 240}}\n\n' +
+    'Input: "buka akun GoPay pasif spending 100000"\n' +
+    '→ {"description": "", "amount": 0, "type": "expense", "category": "Lainnya", "date": "' + today + '", "accountHint": "", "destAccountHint": "", "adminFee": 0, "debtType": "", "debtPerson": "", "splitBill": null, "newAccount": {"bankName": "GoPay", "accountType": "passive", "accountSubType": "Spending", "initialBalance": 100000}}\n\n' +
+    'Input: "buat akun reksadana Bibit investasi 2000000"\n' +
+    '→ {"description": "", "amount": 0, "type": "expense", "category": "Lainnya", "date": "' + today + '", "accountHint": "", "destAccountHint": "", "adminFee": 0, "debtType": "", "debtPerson": "", "splitBill": null, "newAccount": {"bankName": "Bibit", "accountType": "investment", "accountSubType": "Reksadana", "initialBalance": 2000000}}';
 }

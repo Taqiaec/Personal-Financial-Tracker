@@ -1,9 +1,9 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
-import { handleStart, handleHelp, handleLink, handleSaldo, handleTambah, handleBulanIni, handleAkun, handlePhoto, handleFreeText, handleStatistik, handleBanding, handleTransfer, handleHutang, handlePiutang, handleBayar } from './commands';
+import { handleStart, handleHelp, handleLink, handleSaldo, handleTambah, handleBulanIni, handleAkun, handleKredit, handlePhoto, handleFreeText, handleStatistik, handleBanding, handleTransfer, handleHutang, handlePiutang, handleBayar, handleBuatAkun } from './commands';
 import { sendMessage } from './telegram';
 export { callGemini } from './gemini';
-export { dailyRecap, weeklyRecap } from './scheduler';
+export { dailyRecap, weeklyRecap, monthlyCreditInterest } from './scheduler';
 
 admin.initializeApp();
 
@@ -65,6 +65,8 @@ export const telegramWebhook = functions
         await handleBanding(chatId);
       } else if (text === '/akun') {
         await handleAkun(chatId);
+      } else if (text === '/kredit') {
+        await handleKredit(chatId);
       } else if (text.startsWith('/link')) {
         const code = text.replace('/link', '').trim();
         if (!code) {
@@ -84,6 +86,8 @@ export const telegramWebhook = functions
         await handlePiutang(chatId);
       } else if (text.startsWith('/bayar')) {
         await handleBayar(chatId, text);
+      } else if (text.startsWith('/buatakun')) {
+        await handleBuatAkun(chatId, text);
       } else if (text.startsWith('/')) {
         await sendMessage(chatId,
           '❓ Command tidak dikenal.\n\n' +

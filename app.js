@@ -6,7 +6,8 @@ const CATEGORIES = {
 
 const ACCOUNT_SUB_TYPE_DEFAULTS = {
     passive: ['Spending', 'Tabungan', 'Payroll'],
-    investment: ['Reksadana', 'Emas', 'Saham DN', 'Saham LN']
+    investment: ['Reksadana', 'Emas', 'Saham DN', 'Saham LN'],
+    credit: ['Revolving', 'Cicilan']
 };
 
 const CHART_COLORS = [
@@ -56,7 +57,7 @@ function initDataListeners(userUid) {
         .onSnapshot(function (snap) {
             accCache = snap.docs.map(function (doc) {
                 var data = doc.data();
-                return { id: doc.id, bankName: data.bankName, accountType: data.accountType, accountSubType: data.accountSubType || '', initialBalance: data.initialBalance || 0, currentValue: data.currentValue != null ? data.currentValue : null, lastAdjustedAt: data.lastAdjustedAt || null };
+                return { id: doc.id, bankName: data.bankName, accountType: data.accountType, accountSubType: data.accountSubType || '', initialBalance: data.initialBalance || 0, currentValue: data.currentValue != null ? data.currentValue : null, lastAdjustedAt: data.lastAdjustedAt || null, creditLimit: data.creditLimit, interestRate: data.interestRate, dueDate: data.dueDate, minimumPaymentRate: data.minimumPaymentRate, totalLoan: data.totalLoan, tenorMonths: data.tenorMonths, monthlyInstallment: data.monthlyInstallment, startDate: data.startDate };
             });
             renderActivePage();
         }, function (err) {
@@ -180,17 +181,34 @@ function renderActivePage() {
 
 // === UTILITY: ACCOUNT BALANCE (computed dynamically) ===
 function getAccountBalance(accountId) {
+    var account = getAccountById(accountId);
+    var isCredit = account && account.accountType === 'credit';
+    var creditMode = isCredit ? getCreditMode(account) : null;
+
     var txBalance = txCache.reduce(function (sum, t) {
         if (t.type === 'transfer') {
-            if (t.accountId === accountId) return sum - t.amount;
-            if (t.transferToAccountId === accountId) return sum + t.amount;
+            if (t.accountId === accountId) {
+                if (isCredit) return sum + t.amount; // cash advance: +usage
+                return sum - t.amount;
+            }
+            if (t.transferToAccountId === accountId) {
+                if (isCredit) {
+                    if (creditMode === 'installment') return sum + t.amount; // payment: +paid
+                    return sum - t.amount; // revolving payment: -usage
+                }
+                return sum + t.amount;
+            }
             return sum;
         }
         if (t.accountId !== accountId) return sum;
+        if (isCredit) {
+            if (creditMode === 'installment') return sum; // installment: expense/income don't apply
+            return sum + (t.type === 'income' ? -t.amount : t.amount); // revolving: expense=+usage
+        }
         return sum + (t.type === 'income' ? t.amount : -t.amount);
     }, 0);
 
-    if (debtCache && debtCache.length > 0) {
+    if (!isCredit && debtCache && debtCache.length > 0) {
         debtCache.forEach(function (d) {
             if (d.type === 'piutang' && d.accountId === accountId) {
                 txBalance -= (d.remainingAmount || 0);
@@ -202,10 +220,61 @@ function getAccountBalance(accountId) {
 }
 
 function getAccountDisplayBalance(account) {
+    if (account.accountType === 'credit') {
+        if (getCreditMode(account) === 'installment') {
+            var totalPaid = (account.initialBalance || 0) + getAccountBalance(account.id);
+            var remaining = Math.max(0, (account.totalLoan || 0) - totalPaid);
+            return -remaining;
+        }
+        // Revolving (default)
+        var usage = (account.initialBalance || 0) + getAccountBalance(account.id);
+        return -Math.max(0, usage);
+    }
     if (account.accountType === 'investment' && account.currentValue != null) {
         return account.currentValue;
     }
     return (account.initialBalance || 0) + getAccountBalance(account.id);
+}
+
+// === CREDIT HELPERS ===
+function getCreditMode(account) {
+    if (account.accountSubType === 'Cicilan') return 'installment';
+    return 'revolving';
+}
+
+function getCreditModeLabel(mode) {
+    var map = { revolving: 'Revolving (Kartu Kredit)', installment: 'Cicilan (KPR, dll)' };
+    return map[mode] || mode || 'Revolving';
+}
+
+function getCreditUsage(account) {
+    if (account.accountType !== 'credit' || getCreditMode(account) === 'installment') return 0;
+    return Math.max(0, (account.initialBalance || 0) + getAccountBalance(account.id));
+}
+
+function getCreditPaid(account) {
+    if (account.accountType !== 'credit' || getCreditMode(account) !== 'installment') return 0;
+    return Math.max(0, (account.initialBalance || 0) + getAccountBalance(account.id));
+}
+
+function getCreditRemaining(account) {
+    if (account.accountType !== 'credit' || getCreditMode(account) !== 'installment') return 0;
+    return Math.max(0, (account.totalLoan || 0) - getCreditPaid(account));
+}
+
+function getCreditProgress(account) {
+    if (account.accountType !== 'credit') return { current: 0, total: 0, pct: 0 };
+    if (getCreditMode(account) === 'installment') {
+        var paid = getCreditPaid(account);
+        var total = account.totalLoan || 0;
+        var pct = total > 0 ? Math.min(Math.round(paid / total * 100), 100) : 0;
+        return { current: paid, total: total, pct: pct };
+    }
+    // Revolving
+    var usage = getCreditUsage(account);
+    var limit = account.creditLimit || 0;
+    var pct = limit > 0 ? Math.min(Math.round(usage / limit * 100), 100) : 0;
+    return { current: usage, total: limit, pct: pct };
 }
 
 function getAccountById(id) {
@@ -254,7 +323,7 @@ function getMonthKey(dateStr, paydayStart) {
 }
 
 function getAccountTypeLabel(type) {
-    var map = { passive: 'Pasif', investment: 'Investasi' };
+    var map = { passive: 'Pasif', investment: 'Investasi', credit: 'Kredit' };
     return map[type] || type;
 }
 
@@ -415,6 +484,13 @@ document.getElementById('transaction-form').addEventListener('submit', function 
             return;
         }
 
+        // Block transfer FROM credit accounts
+        var srcAccount = getAccountById(accountId);
+        if (srcAccount && srcAccount.accountType === 'credit') {
+            showToast('Transfer dari akun kredit belum didukung.');
+            return;
+        }
+
         var transferData = {
             desc: desc,
             amount: amount,
@@ -456,6 +532,23 @@ document.getElementById('transaction-form').addEventListener('submit', function 
     // --- Income/Expense path ---
     var category = document.getElementById('category').value;
     if (!accountId) return;
+
+    // Credit account validation
+    var txAccount = getAccountById(accountId);
+    if (txAccount && txAccount.accountType === 'credit') {
+        if (getCreditMode(txAccount) === 'installment') {
+            showToast('Akun cicilan hanya untuk pembayaran (transfer masuk), bukan pengeluaran.');
+            return;
+        }
+        if (currentType === 'expense' && txAccount.creditLimit > 0) {
+            var currentUsage = getCreditUsage(txAccount);
+            if ((currentUsage + amount) > txAccount.creditLimit) {
+                if (!confirm('Transaksi ini akan melebihi limit kredit Rp ' + formatCurrency(txAccount.creditLimit) + '. Lanjutkan?')) {
+                    return;
+                }
+            }
+        }
+    }
 
     var txData = {
         desc: desc,
@@ -656,7 +749,9 @@ function renderDashboard() {
     renderBudgetProgress();
     renderBudgetAlerts();
     renderPortfolio();
+    renderCreditSummary();
     renderDebtDashboardSummary();
+    initSimulasiPage();
 }
 
 function renderTransactionItems(txns) {
@@ -1257,8 +1352,8 @@ function renderSubTypeSettings() {
     var content = document.getElementById('subtype-content');
     if (!content) return;
 
-    var types = ['passive', 'investment'];
-    var typeLabels = { passive: 'Pasif', investment: 'Investasi' };
+    var types = ['passive', 'investment', 'credit'];
+    var typeLabels = { passive: 'Pasif', investment: 'Investasi', credit: 'Kredit' };
     var html = '';
 
     types.forEach(function (t) {
@@ -1321,8 +1416,8 @@ function renderSubTypeSettings() {
 
 function saveSubTypeSettings() {
     if (!uid) return;
-    var data = { passive: [], investment: [] };
-    ['passive', 'investment'].forEach(function (t) {
+    var data = { passive: [], investment: [], credit: [] };
+    ['passive', 'investment', 'credit'].forEach(function (t) {
         var tagsDiv = document.getElementById('subtype-tags-' + t);
         if (!tagsDiv) return;
         tagsDiv.querySelectorAll('.subtype-tag').forEach(function (tag) {
@@ -1501,6 +1596,96 @@ function renderPortfolio() {
     }).join('');
 }
 
+// === CREDIT SUMMARY (dashboard) ===
+function renderCreditSummary() {
+    var section = document.getElementById('credit-summary-section');
+    var totalEl = document.getElementById('credit-summary-total');
+    var listEl = document.getElementById('credit-summary-list');
+    var row = document.getElementById('dash-bottom-row');
+    if (!section || !totalEl || !listEl) return;
+
+    var creditAccounts = accCache.filter(function (a) { return a.accountType === 'credit'; });
+
+    section.style.display = creditAccounts.length ? '' : 'none';
+    if (row) {
+        row.style.display = '';
+        row.style.gridTemplateColumns = creditAccounts.length ? '' : '1fr';
+    }
+    var totalDebt = creditAccounts.reduce(function (s, a) { return s + getAccountDisplayBalance(a); }, 0);
+    totalEl.innerHTML = 'Total Kredit: <b style="color:var(--expense);">−Rp ' + formatCurrency(Math.abs(totalDebt)) + '</b>';
+
+    // Check for past-due revolving accounts
+    var today = new Date().getDate();
+    var pastDueAccounts = creditAccounts.filter(function (a) {
+        return getCreditMode(a) !== 'installment' && a.dueDate && today > a.dueDate && getCreditUsage(a) > 0;
+    });
+    var alertHtml = '';
+    if (pastDueAccounts.length > 0) {
+        alertHtml = '<div class="budget-alert over" style="margin-bottom:12px;">' +
+            'Lewat jatuh tempo: ' + pastDueAccounts.map(function (a) { return escapeHtml(a.bankName); }).join(', ') +
+            '</div>';
+    }
+
+    listEl.innerHTML = alertHtml + creditAccounts.map(function (a) {
+        var progress = getCreditProgress(a);
+        var pct = progress.pct;
+        var barColor;
+        if (getCreditMode(a) === 'installment') {
+            barColor = pct >= 100 ? '#10b981' : (pct >= 50 ? '#4f46e5' : '#f59e0b');
+        } else {
+            barColor = pct >= 100 ? '#dc2626' : (pct >= 80 ? '#f59e0b' : '#4f46e5');
+        }
+        var balance = getAccountDisplayBalance(a);
+        var modeLabel = getCreditMode(a) === 'installment' ? 'Cicilan' : 'Revolving';
+        var subBadge = a.accountSubType ? ' <span class="badge-subtype">' + escapeHtml(a.accountSubType) + '</span>' : '';
+
+        var dueDateHtml = '';
+        if (getCreditMode(a) !== 'installment' && a.dueDate) {
+            var dueDay = a.dueDate;
+            var dueClass = today > dueDay ? 'due-past' : (dueDay - today <= 3 ? 'due-soon' : 'due-ok');
+            dueDateHtml = '<span class="due-date-badge ' + dueClass + '">Jatuh Tempo: tgl ' + dueDay + '</span>';
+        }
+
+        var infoHtml = '';
+        if (getCreditMode(a) === 'installment') {
+            if (pct >= 100) {
+                infoHtml = '<span class="badge-lunas">Lunas</span>';
+            } else {
+                var remaining = getCreditRemaining(a);
+                var monthsLeft = a.monthlyInstallment > 0 ? Math.ceil(remaining / a.monthlyInstallment) : 0;
+                infoHtml = '<span class="credit-installment-info">Rp ' + formatCurrency(a.monthlyInstallment || 0) + '/bln · ' + monthsLeft + ' bln lagi</span>';
+            }
+        } else {
+            if (a.creditLimit > 0) {
+                var usage = getCreditUsage(a);
+                var available = Math.max(0, a.creditLimit - usage);
+                infoHtml = '<span class="credit-available-info">Tersedia: Rp ' + formatCurrency(available) + '</span>';
+                if (a.minimumPaymentRate && usage > 0) {
+                    infoHtml += ' · <span class="credit-min-payment">Min: Rp ' + formatCurrency(Math.round(usage * a.minimumPaymentRate / 100)) + '</span>';
+                }
+            }
+        }
+
+        var progressLabel = getCreditMode(a) === 'installment'
+            ? 'Terbayar: Rp ' + formatCurrency(progress.current) + ' / Rp ' + formatCurrency(progress.total)
+            : 'Terpakai: Rp ' + formatCurrency(progress.current) + ' / Rp ' + formatCurrency(progress.total);
+
+        return '<div class="credit-item">' +
+            '<div class="credit-item-header">' +
+                '<span class="credit-item-name">' + escapeHtml(a.bankName) + subBadge + '</span>' +
+                '<span class="credit-item-mode badge-mode-' + (getCreditMode(a) || 'revolving') + '">' + modeLabel + '</span>' +
+                dueDateHtml +
+            '</div>' +
+            '<span class="credit-item-balance" style="color:var(--expense);">Rp ' + formatCurrency(balance) + '</span>' +
+            '<div class="credit-progress-section">' +
+                '<div class="credit-progress-label"><span>' + progressLabel + '</span></div>' +
+                '<div class="budget-progress-bar"><div class="budget-progress-fill" style="width:' + pct + '%;background:' + barColor + ';"></div></div>' +
+                '<div class="credit-progress-info">' + infoHtml + '<span class="credit-progress-pct">' + pct + '%</span></div>' +
+            '</div>' +
+            '</div>';
+    }).join('');
+}
+
 // === RENDER: ACCOUNTS PAGE ===
 function renderAccountsPage() {
     var accounts = accCache;
@@ -1558,7 +1743,64 @@ function renderAccountsPage() {
         var adjustBtn = a.accountType === 'investment'
             ? '<button class="btn-icon adjust" data-adjust-account="' + a.id + '" title="Sesuaikan Saldo"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg></button>'
             : '';
-        return '<div class="account-card type-' + a.accountType + '"><div class="account-card-header"><span class="account-bank-name">' + escapeHtml(a.bankName) + '</span><span class="account-type-badge badge-' + a.accountType + '">' + getAccountTypeLabel(a.accountType) + '</span>' + subBadge + '</div><span class="account-balance">Rp ' + formatCurrency(balance) + '</span><div class="account-card-actions">' + adjustBtn + '<button class="btn-icon edit" data-edit-account="' + a.id + '" title="Edit"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button><button class="btn-icon delete" data-delete-account="' + a.id + '" title="Hapus"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button></div></div>';
+
+        // Credit-specific content
+        var creditContent = '';
+        var balanceClass = '';
+        if (a.accountType === 'credit') {
+            balanceClass = ' credit-balance';
+            var modeBadge = '<span class="badge-credit-mode badge-mode-' + (getCreditMode(a) || 'revolving') + '">' + getCreditModeLabel(getCreditMode(a)) + '</span>';
+            var progress = getCreditProgress(a);
+            var pct = progress.pct;
+            var barColor;
+            if (getCreditMode(a) === 'installment') {
+                if (pct >= 100) barColor = '#10b981';
+                else if (pct >= 50) barColor = '#4f46e5';
+                else barColor = '#f59e0b';
+            } else {
+                if (pct >= 100) barColor = '#dc2626';
+                else if (pct >= 80) barColor = '#f59e0b';
+                else barColor = '#4f46e5';
+            }
+            var dueDateHtml = '';
+            if (getCreditMode(a) !== 'installment' && a.dueDate) {
+                var today = new Date().getDate();
+                var dueDay = a.dueDate;
+                var dueClass = today > dueDay ? 'due-past' : (dueDay - today <= 3 ? 'due-soon' : 'due-ok');
+                dueDateHtml = '<span class="due-date-badge ' + dueClass + '">Jatuh Tempo: tgl ' + dueDay + '</span>';
+            }
+            var infoHtml = '';
+            if (getCreditMode(a) === 'installment') {
+                var remaining = getCreditRemaining(a);
+                if (pct >= 100) {
+                    infoHtml = '<span class="badge-lunas">Lunas</span>';
+                } else if (a.monthlyInstallment) {
+                    var monthsLeft = a.monthlyInstallment > 0 ? Math.ceil(remaining / a.monthlyInstallment) : 0;
+                    infoHtml = '<span class="credit-installment-info">Cicilan: Rp ' + formatCurrency(a.monthlyInstallment) + '/bln · ' + monthsLeft + ' bln lagi</span>';
+                }
+            } else {
+                if (a.creditLimit > 0) {
+                    var usage = getCreditUsage(a);
+                    var available = Math.max(0, a.creditLimit - usage);
+                    infoHtml = '<span class="credit-available-info">Tersedia: Rp ' + formatCurrency(available) + '</span>';
+                    if (a.minimumPaymentRate && usage > 0) {
+                        var minPayment = Math.round(usage * a.minimumPaymentRate / 100);
+                        infoHtml += ' · <span class="credit-min-payment">Min. Bayar: Rp ' + formatCurrency(minPayment) + '</span>';
+                    }
+                }
+            }
+            var progressLabel = getCreditMode(a) === 'installment'
+                ? 'Terbayar: Rp ' + formatCurrency(progress.current) + ' / Rp ' + formatCurrency(progress.total)
+                : 'Terpakai: Rp ' + formatCurrency(progress.current) + ' / Rp ' + formatCurrency(progress.total);
+            creditContent = modeBadge + dueDateHtml +
+                '<div class="credit-progress-section">' +
+                    '<div class="credit-progress-label"><span>' + progressLabel + '</span></div>' +
+                    '<div class="budget-progress-bar"><div class="budget-progress-fill" style="width:' + pct + '%;background:' + barColor + ';"></div></div>' +
+                    '<div class="credit-progress-info">' + infoHtml + '<span class="credit-progress-pct">' + pct + '%</span></div>' +
+                '</div>';
+        }
+
+        return '<div class="account-card type-' + a.accountType + '"><div class="account-card-header"><span class="account-bank-name">' + escapeHtml(a.bankName) + '</span><span class="account-type-badge badge-' + a.accountType + '">' + getAccountTypeLabel(a.accountType) + '</span>' + subBadge + '</div><span class="account-balance' + balanceClass + '">Rp ' + formatCurrency(balance) + '</span>' + creditContent + '<div class="account-card-actions">' + adjustBtn + '<button class="btn-icon edit" data-edit-account="' + a.id + '" title="Edit"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button><button class="btn-icon delete" data-delete-account="' + a.id + '" title="Hapus"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button></div></div>';
     }).join('');
 }
 
@@ -1681,6 +1923,18 @@ var accBankInput = document.getElementById('acc-bank');
 var accTypeInput = document.getElementById('acc-type');
 var accSubTypeInput = document.getElementById('acc-subtype');
 var accBalanceInput = document.getElementById('acc-balance');
+var creditFields = document.getElementById('credit-fields');
+var creditFieldsRevolving = document.getElementById('credit-fields-revolving');
+var creditFieldsInstallment = document.getElementById('credit-fields-installment');
+var accCreditLimitInput = document.getElementById('acc-credit-limit');
+var accInterestRateInput = document.getElementById('acc-interest-rate');
+var accDueDateInput = document.getElementById('acc-due-date');
+var accMinPaymentRateInput = document.getElementById('acc-min-payment-rate');
+var accTotalLoanInput = document.getElementById('acc-total-loan');
+var accInterestRateInstInput = document.getElementById('acc-interest-rate-inst');
+var accTenorMonthsInput = document.getElementById('acc-tenor-months');
+var accMonthlyInstallmentInput = document.getElementById('acc-monthly-installment');
+var accStartDateInput = document.getElementById('acc-start-date');
 
 document.getElementById('btn-add-account').addEventListener('click', function () { openAccountModal(); });
 
@@ -1712,7 +1966,30 @@ function openAccountModal(account) {
         accSubTypeInput.value = account.accountSubType || '';
         accBalanceInput.value = account.initialBalance || 0;
         accBalanceInput.disabled = false;
-        document.getElementById('acc-balance').parentElement.querySelector('label').textContent = 'Saldo Awal (Rp)';
+
+        // Credit fields
+        var isCredit = account.accountType === 'credit';
+        creditFields.style.display = isCredit ? '' : 'none';
+        var balLabel = document.getElementById('acc-balance').parentElement.querySelector('label');
+        if (isCredit) {
+            var isInstallment = (account.accountSubType || '') === 'Cicilan';
+            balLabel.textContent = isInstallment ? 'Sudah Terbayar (Rp)' : 'Pemakaian Awal (Rp)';
+            creditFieldsRevolving.style.display = isInstallment ? 'none' : '';
+            creditFieldsInstallment.style.display = isInstallment ? '' : 'none';
+            // Revolving fields
+            accCreditLimitInput.value = account.creditLimit || 0;
+            accInterestRateInput.value = account.interestRate || 0;
+            accDueDateInput.value = account.dueDate || 15;
+            accMinPaymentRateInput.value = account.minimumPaymentRate || 10;
+            // Installment fields
+            accTotalLoanInput.value = account.totalLoan || 0;
+            accInterestRateInstInput.value = account.interestRate || 0;
+            accTenorMonthsInput.value = account.tenorMonths || 12;
+            accMonthlyInstallmentInput.value = account.monthlyInstallment || 0;
+            accStartDateInput.value = account.startDate || '';
+        } else {
+            balLabel.textContent = 'Saldo Awal (Rp)';
+        }
     } else {
         modalTitle.textContent = 'Tambah Akun';
         modalSubmitBtn.textContent = 'Simpan Akun';
@@ -1723,13 +2000,39 @@ function openAccountModal(account) {
         accBalanceInput.disabled = false;
         accBalanceInput.value = '0';
         document.getElementById('acc-balance').parentElement.querySelector('label').textContent = 'Saldo Awal (Rp)';
+        creditFields.style.display = 'none';
+        creditFieldsRevolving.style.display = '';
+        creditFieldsInstallment.style.display = 'none';
     }
     modal.classList.add('show');
 }
 
-// Update sub-type options when account type changes
+// Update sub-type options and credit fields when account type changes
 accTypeInput.addEventListener('change', function () {
     populateSubTypeSelect(accTypeInput.value);
+    var isCredit = accTypeInput.value === 'credit';
+    creditFields.style.display = isCredit ? '' : 'none';
+    var balLabel = document.getElementById('acc-balance').parentElement.querySelector('label');
+    if (isCredit) {
+        var isInstallment = accSubTypeInput.value === 'Cicilan';
+        balLabel.textContent = isInstallment ? 'Sudah Terbayar (Rp)' : 'Pemakaian Awal (Rp)';
+        creditFieldsRevolving.style.display = isInstallment ? 'none' : '';
+        creditFieldsInstallment.style.display = isInstallment ? '' : 'none';
+    } else {
+        balLabel.textContent = 'Saldo Awal (Rp)';
+        creditFieldsRevolving.style.display = '';
+        creditFieldsInstallment.style.display = 'none';
+    }
+});
+
+// Toggle revolving/installment sub-fields based on sub-type selection
+accSubTypeInput.addEventListener('change', function () {
+    if (accTypeInput.value !== 'credit') return;
+    var isInstallment = accSubTypeInput.value === 'Cicilan';
+    creditFieldsRevolving.style.display = isInstallment ? 'none' : '';
+    creditFieldsInstallment.style.display = isInstallment ? '' : 'none';
+    var balLabel = document.getElementById('acc-balance').parentElement.querySelector('label');
+    if (balLabel) balLabel.textContent = isInstallment ? 'Sudah Terbayar (Rp)' : 'Pemakaian Awal (Rp)';
 });
 
 function closeAccountModal() {
@@ -1747,15 +2050,33 @@ document.getElementById('account-form').addEventListener('submit', function (e) 
     if (!bankName) return;
     if (!uid) return;
 
+    var data = {
+        bankName: bankName,
+        accountType: accountType,
+        accountSubType: accountSubType,
+        initialBalance: initialBalance
+    };
+
+    // Credit-specific fields
+    if (accountType === 'credit') {
+        var creditMode = accountSubType === 'Cicilan' ? 'installment' : 'revolving';
+        data.creditMode = creditMode;
+        data.interestRate = parseFloat((creditMode === 'installment' ? accInterestRateInstInput : accInterestRateInput).value) || 0;
+        if (creditMode === 'installment') {
+            data.totalLoan = parseInt(accTotalLoanInput.value) || 0;
+            data.tenorMonths = parseInt(accTenorMonthsInput.value) || 0;
+            data.monthlyInstallment = parseInt(accMonthlyInstallmentInput.value) || 0;
+            data.startDate = accStartDateInput.value || '';
+        } else {
+            data.creditLimit = parseInt(accCreditLimitInput.value) || 0;
+            data.dueDate = parseInt(accDueDateInput.value) || 15;
+            data.minimumPaymentRate = parseFloat(accMinPaymentRateInput.value) || 10;
+        }
+    }
+
     if (id) {
         // Edit mode
-        var updateData = {
-            bankName: bankName,
-            accountType: accountType,
-            accountSubType: accountSubType,
-            initialBalance: initialBalance
-        };
-        db.collection('users').doc(uid).collection('accounts').doc(id).update(updateData).then(function () {
+        db.collection('users').doc(uid).collection('accounts').doc(id).update(data).then(function () {
             closeAccountModal();
             showToast('Akun berhasil diperbarui!');
         }).catch(function (err) {
@@ -1763,13 +2084,8 @@ document.getElementById('account-form').addEventListener('submit', function (e) 
         });
     } else {
         // Add mode
-        db.collection('users').doc(uid).collection('accounts').add({
-            bankName: bankName,
-            accountType: accountType,
-            accountSubType: accountSubType,
-            initialBalance: initialBalance,
-            createdAt: firebase.firestore.FieldValue.serverTimestamp()
-        }).then(function () {
+        data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+        db.collection('users').doc(uid).collection('accounts').add(data).then(function () {
             closeAccountModal();
             showToast('Akun berhasil ditambahkan!');
         }).catch(function (err) {
@@ -2521,6 +2837,152 @@ function resizeImage(base64, mediaType) {
         });
     }
 })();
+
+// === SIMULASI KREDIT ===
+function initSimulasiPage() {
+    var btnHitung = document.getElementById('btn-hitung-simulasi');
+    var btnBuatAkun = document.getElementById('btn-buat-akun-cicilan');
+
+    if (btnHitung && !btnHitung.dataset.bound) {
+        btnHitung.dataset.bound = '1';
+        btnHitung.addEventListener('click', hitungSimulasi);
+    }
+    if (btnBuatAkun && !btnBuatAkun.dataset.bound) {
+        btnBuatAkun.dataset.bound = '1';
+        btnBuatAkun.addEventListener('click', buatAkunDariSimulasi);
+    }
+}
+
+function hitungSimulasi() {
+    var jumlah = parseInt(document.getElementById('sim-jumlah').value) || 0;
+    var dp = parseInt(document.getElementById('sim-dp').value) || 0;
+    var bungaTahunan = parseFloat(document.getElementById('sim-bunga').value) || 0;
+    var tenor = parseInt(document.getElementById('sim-tenor').value) || 0;
+    var tipe = document.getElementById('sim-tipe').value;
+
+    if (!jumlah || !tenor) {
+        showToast('Isi jumlah pinjaman dan tenor.');
+        return;
+    }
+
+    var pinjaman = Math.max(0, jumlah - dp);
+    var hasil = document.getElementById('sim-hasil');
+    hasil.style.display = '';
+
+    var cicilan, totalBayar, totalBunga;
+    var amortBody = document.getElementById('sim-amort-body');
+    var bulanan = bungaTahunan / 100 / 12;
+
+    if (tipe === 'flat') {
+        totalBunga = pinjaman * (bungaTahunan / 100) * (tenor / 12);
+        totalBayar = pinjaman + totalBunga;
+        cicilan = Math.round(totalBayar / tenor);
+        // Flat amortization
+        var pokokPerBulan = Math.round(pinjaman / tenor);
+        var bungaPerBulan = Math.round(totalBunga / tenor);
+        var sisa = pinjaman;
+        var rows = '';
+        var maxShow = Math.min(tenor, 12);
+        for (var i = 1; i <= maxShow; i++) {
+            sisa -= pokokPerBulan;
+            if (sisa < 0) sisa = 0;
+            rows += '<tr><td>' + i + '</td><td>Rp ' + formatCurrency(cicilan) + '</td><td>Rp ' + formatCurrency(pokokPerBulan) + '</td><td>Rp ' + formatCurrency(bungaPerBulan) + '</td><td>Rp ' + formatCurrency(sisa) + '</td></tr>';
+        }
+        if (tenor > 12) {
+            rows += '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);">...</td></tr>';
+            rows += '<tr><td>' + tenor + '</td><td>Rp ' + formatCurrency(cicilan) + '</td><td>Rp ' + formatCurrency(pokokPerBulan + (pinjaman % tenor > 0 ? pinjaman % tenor : 0)) + '</td><td>Rp ' + formatCurrency(bungaPerBulan) + '</td><td>Rp 0</td></tr>';
+        }
+        amortBody.innerHTML = rows;
+    } else {
+        // Efektif/Anuitas
+        if (bulanan > 0) {
+            cicilan = Math.round(pinjaman * bulanan * Math.pow(1 + bulanan, tenor) / (Math.pow(1 + bulanan, tenor) - 1));
+        } else {
+            cicilan = Math.round(pinjaman / tenor);
+        }
+        totalBayar = cicilan * tenor;
+        totalBunga = totalBayar - pinjaman;
+
+        var sisaPinjaman = pinjaman;
+        var rows = '';
+        var maxShow = Math.min(tenor, 12);
+        for (var j = 1; j <= maxShow; j++) {
+            var bungaBulan = Math.round(sisaPinjaman * bulanan);
+            var pokokBulan = cicilan - bungaBulan;
+            if (j === tenor) {
+                pokokBulan = sisaPinjaman;
+                bungaBulan = cicilan - pokokBulan;
+            }
+            sisaPinjaman -= pokokBulan;
+            if (sisaPinjaman < 0) sisaPinjaman = 0;
+            rows += '<tr><td>' + j + '</td><td>Rp ' + formatCurrency(cicilan) + '</td><td>Rp ' + formatCurrency(pokokBulan) + '</td><td>Rp ' + formatCurrency(bungaBulan) + '</td><td>Rp ' + formatCurrency(sisaPinjaman) + '</td></tr>';
+        }
+        if (tenor > 12) {
+            rows += '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);">...</td></tr>';
+            // Calculate last row
+            sisaPinjaman = pinjaman;
+            for (var k = 1; k < tenor; k++) {
+                var bb = Math.round(sisaPinjaman * bulanan);
+                sisaPinjaman -= (cicilan - bb);
+            }
+            var lastPokok = Math.max(0, sisaPinjaman);
+            var lastBunga = cicilan - lastPokok;
+            rows += '<tr><td>' + tenor + '</td><td>Rp ' + formatCurrency(cicilan) + '</td><td>Rp ' + formatCurrency(lastPokok) + '</td><td>Rp ' + formatCurrency(lastBunga) + '</td><td>Rp 0</td></tr>';
+        }
+        amortBody.innerHTML = rows;
+    }
+
+    document.getElementById('sim-cicilan').textContent = 'Rp ' + formatCurrency(cicilan) + ' / bulan';
+    document.getElementById('sim-total-bunga').textContent = 'Rp ' + formatCurrency(totalBunga);
+    document.getElementById('sim-total-bayar').textContent = 'Rp ' + formatCurrency(totalBayar);
+    var rasio = totalBayar > 0 ? Math.round(totalBunga / totalBayar * 100) : 0;
+    document.getElementById('sim-rasio').textContent = rasio + '%';
+
+    // Store for later use
+    document.getElementById('sim-hasil').dataset.pinjaman = pinjaman;
+    document.getElementById('sim-hasil').dataset.bunga = bungaTahunan;
+    document.getElementById('sim-hasil').dataset.tenor = tenor;
+    document.getElementById('sim-hasil').dataset.cicilan = cicilan;
+}
+
+function buatAkunDariSimulasi() {
+    var hasil = document.getElementById('sim-hasil');
+    var pinjaman = parseInt(hasil.dataset.pinjaman) || 0;
+    var bunga = parseFloat(hasil.dataset.bunga) || 0;
+    var tenor = parseInt(hasil.dataset.tenor) || 0;
+    var cicilan = parseInt(hasil.dataset.cicilan) || 0;
+
+    if (!pinjaman) {
+        showToast('Hitung simulasi dulu sebelum membuat akun.');
+        return;
+    }
+
+    // Navigate to account modal
+    document.querySelectorAll('.nav-btn').forEach(function (b) { b.classList.remove('active'); });
+    document.querySelector('.nav-btn[data-page="accounts"]').classList.add('active');
+    document.querySelectorAll('.page').forEach(function (p) { p.classList.remove('active'); });
+    document.getElementById('page-accounts').classList.add('active');
+    renderAccountsPage(); renderSubTypeSettings();
+
+    // Open account modal pre-filled with installment data
+    openAccountModal(null);
+    accTypeInput.value = 'credit';
+    populateSubTypeSelect('credit');
+    accSubTypeInput.value = 'Cicilan';
+    creditFields.style.display = '';
+    creditFieldsRevolving.style.display = 'none';
+    creditFieldsInstallment.style.display = '';
+    var balLabel = document.getElementById('acc-balance').parentElement.querySelector('label');
+    if (balLabel) balLabel.textContent = 'Sudah Terbayar (Rp)';
+    accTotalLoanInput.value = pinjaman;
+    accInterestRateInstInput.value = bunga;
+    accTenorMonthsInput.value = tenor;
+    accMonthlyInstallmentInput.value = cicilan;
+    accBalanceInput.value = '0';
+    accStartDateInput.value = new Date().toISOString().slice(0, 10);
+
+    showToast('Isi nama bank/akun lalu simpan.');
+}
 
 // === TELEGRAM LINK ===
 (function () {

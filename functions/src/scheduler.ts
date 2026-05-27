@@ -20,10 +20,10 @@ function formatDateId(dateStr: string): string {
   return `${parseInt(d, 10)} ${months[parseInt(m, 10) - 1]} ${y}`;
 }
 
-// Daily recap: every day at 9 PM WIB (14:00 UTC)
+// Daily recap: every day at 9 PM WIB
 export const dailyRecap = functions
   .runWith({ secrets: ['TELEGRAM_BOT_TOKEN'] })
-  .pubsub.schedule('0 14 * * *')
+  .pubsub.schedule('0 21 * * *')
   .timeZone('Asia/Jakarta')
   .onRun(async (_context) => {
     const today = getTodayWIB();
@@ -99,7 +99,7 @@ export const dailyRecap = functions
 // Weekly recap: every Sunday at 9 PM WIB
 export const weeklyRecap = functions
   .runWith({ secrets: ['TELEGRAM_BOT_TOKEN'] })
-  .pubsub.schedule('0 14 * * 0')
+  .pubsub.schedule('0 21 * * 0')
   .timeZone('Asia/Jakarta')
   .onRun(async (_context) => {
     const today = getTodayWIB();
@@ -190,4 +190,109 @@ export const weeklyRecap = functions
     }
 
     console.log(`Weekly recap done: sent to ${sent} users, ${failed} failed`);
+  });
+
+// Monthly credit interest: runs daily at 1:00 AM WIB
+// Checks revolving credit accounts on the day after their due date
+export const monthlyCreditInterest = functions
+  .runWith({ secrets: ['TELEGRAM_BOT_TOKEN'] })
+  .pubsub.schedule('0 1 * * *')
+  .timeZone('Asia/Jakarta')
+  .onRun(async (_context) => {
+    const wib = new Date(new Date().getTime() + 7 * 60 * 60 * 1000);
+    const today = wib.getDate();
+    const monthKey = wib.toISOString().split('T')[0].slice(0, 7);
+
+    const usersSnap = await db().collection('telegramUsers').get();
+    if (usersSnap.empty) {
+      console.log('No linked Telegram users, skipping interest calc');
+      return;
+    }
+
+    for (const userDoc of usersSnap.docs) {
+      const chatId = parseInt(userDoc.id, 10);
+      if (!chatId) continue;
+      const uid = userDoc.data().uid;
+
+      try {
+        const accSnap = await db()
+          .collection('users').doc(uid).collection('accounts')
+          .where('accountType', '==', 'credit')
+          .where('creditMode', '==', 'revolving')
+          .where('interestRate', '>', 0)
+          .get();
+
+        if (accSnap.empty) continue;
+
+        const txSnap = await db()
+          .collection('users').doc(uid).collection('transactions').get();
+
+        const txns: Array<{ accountId?: string; transferToAccountId?: string; type: string; amount: number }> = [];
+        txSnap.forEach(d => {
+          const t = d.data();
+          txns.push({ accountId: t.accountId, transferToAccountId: t.transferToAccountId, type: t.type, amount: t.amount });
+        });
+
+        for (const accDoc of accSnap.docs) {
+          const a = accDoc.data();
+          const dueDate = a.dueDate;
+
+          // Only on day after due date
+          if (dueDate !== today - 1 && !(dueDate >= 28 && today === 1)) continue;
+
+          // Dedup: already charged this month?
+          if (a.lastInterestMonth === monthKey) continue;
+
+          // Calculate usage
+          const net = txns
+            .filter(t => t.accountId === accDoc.id || t.transferToAccountId === accDoc.id)
+            .reduce((s, t) => {
+              if (t.type === 'transfer') {
+                if (t.accountId === accDoc.id) return s + t.amount;
+                if (t.transferToAccountId === accDoc.id) return s - t.amount;
+                return s;
+              }
+              if (t.accountId !== accDoc.id) return s;
+              return s + (t.type === 'income' ? -t.amount : t.amount);
+            }, 0);
+          const usage = Math.max(0, (a.initialBalance || 0) + net);
+
+          if (usage <= 0) continue;
+
+          const interestRate = a.interestRate || 0;
+          const monthlyInterest = Math.round(usage * interestRate / 100 / 12);
+
+          if (monthlyInterest <= 0) continue;
+
+          // Create interest transaction
+          await db().collection('users').doc(uid).collection('transactions').add({
+            desc: 'Bunga ' + a.bankName,
+            amount: monthlyInterest,
+            type: 'expense',
+            category: 'Tagihan',
+            date: wib.toISOString().split('T')[0],
+            accountId: accDoc.id,
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+
+          // Update lastInterestMonth
+          await accDoc.ref.update({ lastInterestMonth: monthKey });
+
+          // Notify user
+          try {
+            await sendMessage(chatId,
+              '💸 <b>Bunga Kredit Tercatat</b>\n\n' +
+              'Akun: <b>' + a.bankName + '</b>\n' +
+              'Bunga: Rp ' + formatCurrency(monthlyInterest) + '\n' +
+              'Usage: Rp ' + formatCurrency(usage) + '\n' +
+              'Rate: ' + interestRate + '% / tahun'
+            );
+          } catch (_) { /* notification is best-effort */ }
+        }
+      } catch (err: any) {
+        console.error(`Interest calc failed for user ${uid}:`, err.message);
+      }
+    }
+
+    console.log('Monthly credit interest check complete');
   });

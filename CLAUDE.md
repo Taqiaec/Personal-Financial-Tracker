@@ -15,7 +15,7 @@ Personal finance tracker — SPA hosted on Firebase with a Telegram bot companio
 
 | File | Purpose |
 |---|---|
-| `index.html` | Single-page shell: login/signup forms, navbar with 5 pages (Dashboard, Transaksi, Akun, Budget, Baru), account modal. Script load order: firebase-app-compat → firebase-auth-compat → firebase-firestore-compat → firebase-functions-compat → firebase-config.js → auth.js → app.js. |
+| `index.html` | Single-page shell: login/signup forms, navbar with 6 pages (Dashboard, Transaksi, Akun, Budget, Hutang/Piutang, Baru), account modal, debt payment modal. Script load order: firebase-app-compat → firebase-auth-compat → firebase-firestore-compat → firebase-functions-compat → firebase-config.js → auth.js → app.js. |
 | `style.css` | Design system via CSS custom properties in `:root`. Single `@media (max-width: 700px)` breakpoint. Card pattern: `background: var(--surface)`, `border-radius: var(--radius-lg)`, `padding: 24px`, `box-shadow: var(--shadow-sm)`. |
 | `firebase-config.js` | `initializeApp()`, creates `db` and `auth` globals (Compat SDK). Enables offline Firestore persistence. |
 | `auth.js` | Email/password auth with LOCAL/SESSION persistence. Signup creates `users/{uid}/profile/data` + `users/{uid}/settings/main` (pre-seeded Gemini API key). Auth state observer routes between `#auth-section` and `#app-content`. |
@@ -66,7 +66,7 @@ CATEGORIES = {
 
 ## Navigation
 
-Five `.nav-btn` buttons — `data-page` maps to `#page-{name}`:
+Six `.nav-btn` buttons — `data-page` maps to `#page-{name}`:
 
 | data-page | Section ID | Render function | Notes |
 |---|---|---|---|
@@ -74,9 +74,10 @@ Five `.nav-btn` buttons — `data-page` maps to `#page-{name}`:
 | `transactions` | `#page-transactions` | `renderTransactions()` | Filter by type + category |
 | `accounts` | `#page-accounts` | `renderAccountsPage()` | Also calls `renderSubTypeSettings()` (expandable, below account grid) |
 | `budgets` | `#page-budgets` | `renderBudgets()` | Per-category expense budget inputs with save button |
-| `add` | `#page-add` | `updateFormForType()` + `populateAccountSelect()` | Type tabs (expense/income/transfer) control form visibility. Transfer shows dest account + admin fee. Also used for edit mode. |
+| `debts` | `#page-debts` | `renderDebts()` | Filter by type (hutang/piutang) + status (active/partial/paid). Default: active only. Payment modal records partial payments. |
+| `add` | `#page-add` | `updateFormForType()` + `populateAccountSelect()` | Type tabs (expense/income/transfer) control form visibility. Transfer shows dest account + admin fee. Split bill section visible for expense type (non-edit). Also used for edit mode. |
 
-Nav click handler at `app.js:~230` explicitly maps each page. When adding pages, update both the HTML `#page-*` section AND the nav handler.
+Nav click handler at `app.js:~312` explicitly maps each page. When adding pages, update both the HTML `#page-*` section AND the nav handler.
 
 ## Key patterns
 
@@ -88,11 +89,11 @@ Nav click handler at `app.js:~230` explicitly maps each page. When adding pages,
 - **Toast**: `showToast(msg)` creates/reuses `#toast` div, auto-hides 2.2s.
 - **Modal**: `#account-modal` toggled via `.show` class. `openAccountModal(account?)` — with account = edit mode, without = add mode.
 - **Edit transaction flow**: Click pencil `.tx-edit` → `editTransaction(id)` pre-fills form, changes heading to "Edit Transaksi", shows "Batal" button, navigates to `#page-add`. Sets `currentType` from tx.type, activates correct tab, calls `updateFormForType()`. For transfers, populates dest account and hides category. Cancel via `resetTransactionForm()` returns to transactions page. Submit checks `#edit-tx-id` — if set uses `.update()`, else `.add()`.
-- **Transfer flow**: `currentType` variable tracks active type-tab (expense/income/transfer). `updateFormForType()` toggles visibility: category hidden for transfer, dest account + admin fee shown only for transfer. Source label changes to "Akun Asal". Validation ensures source≠dest. Admin fee > 0 creates separate expense doc with category "Lainnya". Transfer displays with blue source→dest badge in transaction list. Transfers excluded from income/expense totals, but calculated into per-account net balances (source -= amount, dest += amount).
+- **Transfer flow**: `currentType` variable tracks active type-tab (expense/income/transfer). `updateFormForType()` toggles visibility: category hidden for transfer, dest account + admin fee shown only for transfer. Source label changes to "Akun Asal". Validation ensures source≠dest. Admin fee > 0 creates separate expense doc with category "Lainnya" (applies to ALL transaction types — bot + web scanner, not just transfers). Transfer displays with blue source→dest badge in transaction list. Transfers excluded from income/expense totals, but calculated into per-account net balances (source -= amount, dest += amount).
 - **Budget system**: `budgetCache` from `onSnapshot` on `settings/budgets`. `renderBudgets()` builds inputs per `CATEGORIES.expense`. `renderBudgetProgress()` shows progress bars (blue <80%, yellow 80-99%, red 100%+). `renderBudgetAlerts()` shows warnings at 80%/100% thresholds. Categories with 0 budget hidden.
 - **Card styling**: All dashboard cards use: `background: var(--surface); border-radius: var(--radius-lg); padding: 24px; box-shadow: var(--shadow-sm);`. Includes: `.chart-card`, `.recent-section`, `.budget-progress-section`, `.settings-bar`.
 - **Debt system (Hutang/Piutang)**: `debtCache` from `onSnapshot` on `users/{uid}/debts`. Debts page at `#page-debts` with type/status filters (default: "Aktif" = non-paid). Payment modal: records payment amount, date, account, note → pushes to `payments[]` array, updates `remainingAmount` and `status`, then creates a transaction for ledger: piutang→income (category `💰 Piutang`), hutang→expense (category `Hutang`). Payment `createdAt` inside array uses `new Date().toISOString()` (NOT `serverTimestamp()` — not supported in arrays). Debt payments excluded from `getAccountBalance()` (transactions handle the balance, avoids double-count).
-- **Split Bill (Patungan)**: Web form in `#page-add` (expense type, non-edit only). Toggle `#split-bill-enabled`. Two modes: Equal (`totalAmount ÷ totalPeople`, remainder→last friend) and Custom (name + amount per friend). Creates 1 expense (userShare only) + N piutang debts (`accountId: ""` to avoid double-counting). Backend uses `runTransaction` for atomic writes (expense + debts all-or-nothing). Gemini prompts detect split bill keywords (patungan, split, bareng, bagi rata, iuran, urunan) with mutual exclusivity vs debt detection.
+- **Split Bill (Patungan)**: Web form in `#page-add` (expense type, non-edit only). Toggle `#split-bill-enabled`. Three modes detected by AI: Equal (`totalAmount ÷ totalPeople`, remainder→userShare), Custom (name + amount per friend), Item-based (item+price mapping — e.g. "cheeseburger 30k cola 10k, gw cheeseburger falah cola"). Creates 1 expense (userShare only) + N piutang debts (`accountId: ""` to avoid double-counting). Backend uses `runTransaction` for atomic writes (expense + debts all-or-nothing). Gemini prompts detect split bill keywords (patungan, split, bareng, bagi rata, iuran, urunan) with mutual exclusivity vs debt detection.
 - **Piutang income adjustment**: Piutang payment transactions (category `💰 Piutang`) are **excluded from income totals** and **subtracted from expense totals** across ALL summary displays: `renderDashboard()`, `renderPieChart()`, `renderBarChart()`, `renderAccountsPage()`. This makes piutang repayments reduce net expenses rather than inflate income. Accounts page shows dual total: "Sebelum Hutang" (pure account balances) and "Setelah Hutang" (balances + piutang − hutang) with debt summary section using same `.debt-summary-section` classes as dashboard.
 
 ### Payday-based month logic
@@ -117,11 +118,13 @@ Custom Canvas 2D at 2x HiDPI via `window.devicePixelRatio`. No Chart.js.
 On `#page-add`. Two paths:
 
 1. **Image upload** (web): User uploads receipt → `firebase.functions().httpsCallable('callGemini')` → Gemini 2.5 Flash scans image.
-2. **Photo message** (Telegram): User sends photo to bot → `handlePhoto()` downloads + resizes via `downloadAndResizePhoto()` (max 1200px, 80% JPEG via `sharp`) → calls `callGeminiAPI()` with `buildScanPrompt()`. Caption passed as hint — enables transfer detection from photo + caption combo. No resize on web path (already done client-side).
+2. **Photo message** (Telegram): User sends photo to bot → `handlePhoto()` downloads + resizes via `downloadAndResizePhoto()` (max 1200px, 80% JPEG via `sharp`) → calls `callGeminiAPI()` with `buildScanPrompt()`. **Caption is PRIMARY** — overrides image content for description, category, and type (e.g. SS transfer BCA + caption "gojek nasgor" → expense, not transfer). No resize on web path (already done client-side).
 
 - **Image handling**: File input + drag-and-drop on `.upload-zone`. JPG/PNG/WebP. Auto-resize >3.9MB base64 (canvas max 1200px, 80% JPEG). Clipboard paste supported.
-- **Response parsing**: `extractJSON()` (regex), `normalizeResult()` (validates category against `CATEGORIES`, coerces type, validates date, preserves `splitBill` and `debtType`/`debtPerson` fields).
-- **Account matching**: AI returns `accountHint`; `displayParseResult()` does case-insensitive substring match against `accCache`. Also displays debt/split info when detected.
+- **Response parsing**: `extractJSON()` (regex), `normalizeResult()` (validates category against `CATEGORIES`, coerces type, validates date, preserves `splitBill`, `debtType`/`debtPerson`, and `adminFee` fields).
+- **Account matching**: AI returns `accountHint`; `displayParseResult()` does case-insensitive substring match against `accCache`. Also displays debt/split/admin-fee info when detected.
+- **Split bill detection**: Three modes — Equal (total ÷ people), Custom (name + amount), Item-based (item+price mapping, e.g. "cheeseburger 30k cola 10k, gw cheeseburger falah cola").
+- **Admin fee**: Detected for ALL transaction types (not just transfers). Creates separate "Biaya Admin" expense entry.
 
 ## Telegram Bot
 
@@ -130,9 +133,9 @@ Bot: [@Fintracker_Takii_Bot](https://t.me/Fintracker_Takii_Bot). Webhook: `teleg
 **Linking flow**: Web app generates 6-digit code → writes to `telegramLinkCodes/{code}` → user sends `/link CODE` to bot → bot validates expiry, saves mapping to `telegramUsers/{chatId}`, deletes code.
 
 **Message routing** (in order):
-1. Photo → `handlePhoto(chatId, photoArray, caption?)` — downloads + resizes via `sharp`, scans with Gemini, creates transaction. Caption (if present) prepended to Gemini prompt as hint. Error message now includes actual failure detail (safety filter, empty response, etc.) instead of generic message.
+1. Photo → `handlePhoto(chatId, photoArray, caption?)` — downloads + resizes via `sharp`, scans with Gemini, creates transaction. Caption is PRIMARY SOURCE for description/category/type — overrides image content (e.g. SS transfer + "gojek" caption → expense). Error includes actual failure detail (safety filter, empty response, etc.).
 2. Text starting with `/` → command routing
-3. Other text → `handleFreeText()` — natural language input via Gemini (supports Indonesian slang: goceng=5000, goban=50000, ceban=10000, ceceng=100000, etc.). Detects transfer intent, debt/piutang intent, and split bill (patungan) intent. Routing priority: split bill > debt > transfer > normal income/expense.
+3. Other text → `handleFreeText()` — natural language input via Gemini (supports Indonesian slang: goceng=5000, goban=50000, ceban=10000, ceceng=100000, etc.). Detects transfer intent, debt/piutang intent, split bill (patungan) intent, and admin fee. Routing priority: split bill > debt > transfer > normal income/expense.
 
 **Commands**: `/start`, `/help`, `/link CODE`, `/saldo`, `/tambah JML KATEGORI DESC`, `/pemasukan JML KATEGORI DESC`, `/transfer JML AKUN_ASAL ke AKUN_TUJUAN DESC`, `/bulanini`, `/statistik` (text-based pie chart), `/banding` (month-vs-month comparison), `/akun`.
 

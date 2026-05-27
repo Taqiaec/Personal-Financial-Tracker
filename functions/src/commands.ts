@@ -66,13 +66,32 @@ interface ParsedTransaction {
     totalPeople?: number;
     participants?: Array<{ person: string; amount: number }>;
   };
+  newAccount?: {
+    bankName: string;
+    accountType: string;
+    accountSubType?: string;
+    initialBalance?: number;
+    interestRate?: number;
+    creditLimit?: number;
+    dueDate?: number;
+    minimumPaymentRate?: number;
+    totalLoan?: number;
+    tenorMonths?: number;
+    monthlyInstallment?: number;
+    startDate?: string;
+  };
 }
 
 async function normalizeAndCreateTransaction(
   uid: string,
   parsed: ParsedTransaction,
   accounts: Array<{ bankName: string; id: string }>
-): Promise<{ desc: string; amount: number; type: string; category: string; date: string; accountName: string }> {
+): Promise<{ desc: string; amount: number; type: string; category: string; date: string; accountName: string; bankName?: string; accountType?: string; accountSubType?: string }> {
+  // Account creation (takes highest priority)
+  if (parsed.newAccount && parsed.newAccount.bankName) {
+    return await normalizeAndCreateAccount(uid, parsed.newAccount);
+  }
+
   // Split bill detection (takes priority over debt)
   if (parsed.splitBill && (parsed.splitBill.mode === 'equal' || parsed.splitBill.mode === 'custom')) {
     return await normalizeAndCreateSplitBill(uid, parsed, accounts);
@@ -239,6 +258,55 @@ async function normalizeAndCreateDebt(
   return { desc: person + ': ' + desc, amount, type: 'debt', category: typeLabel, date, accountName };
 }
 
+async function normalizeAndCreateAccount(
+  uid: string,
+  data: any
+): Promise<{ type: string; bankName: string; accountType: string; accountSubType: string; desc: string; amount: number; category: string; date: string; accountName: string }> {
+  const bankName = (data.bankName || '').trim();
+  const accountType = data.accountType || 'passive';
+  const accountSubType = data.accountSubType || '';
+  const initialBalance = Math.round(Number(data.initialBalance)) || 0;
+
+  if (!bankName) throw new Error('Nama akun tidak boleh kosong.');
+  if (!['passive', 'investment', 'credit'].includes(accountType)) throw new Error('Tipe akun tidak valid. Gunakan: pasif, investasi, atau kredit.');
+
+  const doc: any = {
+    bankName, accountType, accountSubType, initialBalance,
+    createdAt: admin.firestore.FieldValue.serverTimestamp()
+  };
+
+  if (accountType === 'credit') {
+    const creditMode = accountSubType === 'Cicilan' ? 'installment' : 'revolving';
+    doc.creditMode = creditMode;
+    doc.interestRate = parseFloat(data.interestRate) || 0;
+    if (creditMode === 'installment') {
+      doc.totalLoan = parseInt(data.totalLoan) || 0;
+      doc.tenorMonths = parseInt(data.tenorMonths) || 0;
+      doc.monthlyInstallment = parseInt(data.monthlyInstallment) || 0;
+      doc.startDate = data.startDate || new Date().toISOString().split('T')[0];
+    } else {
+      doc.creditLimit = parseInt(data.creditLimit) || 0;
+      doc.dueDate = parseInt(data.dueDate) || 15;
+      doc.minimumPaymentRate = parseFloat(data.minimumPaymentRate) || 10;
+    }
+  }
+
+  await db().collection('users').doc(uid).collection('accounts').add(doc);
+
+  const typeLabel = accountType === 'credit' ? '💳 Kredit' : accountType === 'investment' ? '📈 Investasi' : '🏦 Pasif';
+  return {
+    type: 'account',
+    bankName,
+    accountType,
+    accountSubType,
+    desc: typeLabel + ': ' + bankName,
+    amount: initialBalance,
+    category: '',
+    date: new Date().toISOString().split('T')[0],
+    accountName: bankName
+  };
+}
+
 async function normalizeAndCreateSplitBill(
   uid: string,
   parsed: ParsedTransaction,
@@ -380,7 +448,15 @@ export async function handlePhoto(chatId: number, photoArray: Array<{ file_id: s
     const result = await normalizeAndCreateTransaction(uid, parsed, accounts);
 
     let typeLabel: string;
-    if (result.type === 'transfer') {
+    if (result.type === 'account') {
+      await sendMessage(chatId,
+        '✅ <b>Akun dibuat!</b>\n\n' +
+        'Nama: ' + escapeHtml(result.bankName || '') + '\n' +
+        'Tipe: ' + (result.accountType || '') + '\n' +
+        'Sub Tipe: ' + (result.accountSubType || '-')
+      );
+      return;
+    } else if (result.type === 'transfer') {
       typeLabel = '🔀 Transfer';
     } else if (result.type === 'debt') {
       if (result.category && result.category.includes('Split')) {
@@ -435,7 +511,15 @@ export async function handleFreeText(chatId: number, text: string): Promise<void
     const result = await normalizeAndCreateTransaction(uid, parsed, accounts);
 
     let typeLabel: string;
-    if (result.type === 'transfer') {
+    if (result.type === 'account') {
+      await sendMessage(chatId,
+        '✅ <b>Akun dibuat!</b>\n\n' +
+        'Nama: ' + escapeHtml(result.bankName || '') + '\n' +
+        'Tipe: ' + (result.accountType || '') + '\n' +
+        'Sub Tipe: ' + (result.accountSubType || '-')
+      );
+      return;
+    } else if (result.type === 'transfer') {
       typeLabel = '🔀 Transfer';
     } else if (result.type === 'debt') {
       if (result.category && result.category.includes('Split')) {
@@ -492,6 +576,7 @@ export async function handleStart(chatId: number): Promise<void> {
     '/hutang - Lihat daftar hutang\n' +
     '/piutang - Lihat daftar piutang\n' +
     '/bayar &lt;jml&gt; &lt;nama&gt; - Catat pembayaran hutang/piutang\n' +
+    '/buatakun - Buat akun baru\n' +
     '/help - Bantuan';
   await sendMessage(chatId, msg);
 }
@@ -521,6 +606,9 @@ export async function handleHelp(chatId: number): Promise<void> {
     '/bayar - Catat pembayaran hutang/piutang\n' +
     '  Format: <code>/bayar [jumlah] [nama] [akun?] [catatan?]</code>\n' +
     '  Contoh: <code>/bayar 50000 budi bca</code>\n\n' +
+    '/buatakun - Buat akun baru\n' +
+    '  Format: <code>/buatakun [nama] [tipe] [subtipe] [saldo?] [flags...]</code>\n' +
+    '  Contoh: <code>/buatakun BCA pasif Spending 5000000</code>\n\n' +
     '<b>Format jumlah:</b> Angka bulat tanpa Rp, tanpa titik, tanpa koma.\n' +
     '<b>Format deskripsi:</b> Bebas, maks 5 kata.';
   await sendMessage(chatId, msg);
@@ -571,10 +659,10 @@ export async function handleSaldo(chatId: number): Promise<void> {
     db().collection('users').doc(uid).collection('debts').get()
   ]);
 
-  const accounts: Array<{ bankName: string; accountType: string; accountSubType: string; initialBalance: number; currentValue: number | null; id: string }> = [];
+  const accounts: Array<{ bankName: string; accountType: string; accountSubType: string; initialBalance: number; currentValue: number | null; creditMode?: string; creditLimit?: number; totalLoan?: number; dueDate?: number; monthlyInstallment?: number; interestRate?: number; id: string }> = [];
   accSnap.forEach(d => {
     const a = d.data();
-    accounts.push({ bankName: a.bankName, accountType: a.accountType, accountSubType: a.accountSubType || '', initialBalance: a.initialBalance || 0, currentValue: a.currentValue != null ? a.currentValue : null, id: d.id });
+    accounts.push({ bankName: a.bankName, accountType: a.accountType, accountSubType: a.accountSubType || '', initialBalance: a.initialBalance || 0, currentValue: a.currentValue != null ? a.currentValue : null, creditMode: a.creditMode, creditLimit: a.creditLimit, totalLoan: a.totalLoan, dueDate: a.dueDate, monthlyInstallment: a.monthlyInstallment, interestRate: a.interestRate, id: d.id });
   });
 
   const txns: Array<{ accountId?: string; transferToAccountId?: string; type: string; amount: number }> = [];
@@ -591,11 +679,36 @@ export async function handleSaldo(chatId: number): Promise<void> {
 
   let totalBalance = 0;
   const lines: string[] = [];
-  const typeLabels: Record<string, string> = { passive: '💳 Pasif', investment: '📈 Investasi' };
+  const typeLabels: Record<string, string> = { passive: '💳 Pasif', investment: '📈 Investasi', credit: '💳 Kredit' };
 
   accounts.forEach(a => {
     let balance: number;
-    if (a.accountType === 'investment' && a.currentValue != null) {
+    if (a.accountType === 'credit') {
+      const creditMode = a.creditMode || 'revolving';
+      const net = txns
+        .filter(t => t.accountId === a.id || t.transferToAccountId === a.id)
+        .reduce((s, t) => {
+          if (t.type === 'transfer') {
+            if (t.accountId === a.id) return s + t.amount; // cash advance: +usage
+            if (t.transferToAccountId === a.id) {
+              if (creditMode === 'installment') return s + t.amount; // payment: +paid
+              return s - t.amount; // revolving payment: -usage
+            }
+            return s;
+          }
+          if (t.accountId !== a.id) return s;
+          if (creditMode === 'installment') return s; // installment: expense/income N/A
+          return s + (t.type === 'income' ? -t.amount : t.amount); // revolving: expense=+usage
+        }, 0);
+      if (creditMode === 'installment') {
+        const totalPaid = (a.initialBalance || 0) + net;
+        const remaining = Math.max(0, (a.totalLoan || 0) - totalPaid);
+        balance = -remaining;
+      } else {
+        const usage = (a.initialBalance || 0) + net;
+        balance = -Math.max(0, usage);
+      }
+    } else if (a.accountType === 'investment' && a.currentValue != null) {
       balance = a.currentValue;
     } else {
       const net = txns
@@ -608,7 +721,7 @@ export async function handleSaldo(chatId: number): Promise<void> {
           }
           return s + (t.type === 'income' ? t.amount : -t.amount);
         }, 0);
-      balance = a.initialBalance + net;
+      balance = (a.initialBalance || 0) + net;
 
       // Factor in debts
       debts.forEach(d => {
@@ -963,6 +1076,107 @@ export async function handleAkun(chatId: number): Promise<void> {
   await sendMessage(chatId, '<b>🏦 Daftar Akun</b>\n\n' + lines.join('\n\n'));
 }
 
+export async function handleKredit(chatId: number): Promise<void> {
+  const uid = await getUid(chatId);
+  if (!uid) { await sendMessage(chatId, '⚠️ Akun belum dihubungkan. Gunakan /link &lt;kode&gt; dulu.'); return; }
+
+  const [accSnap, txSnap] = await Promise.all([
+    db().collection('users').doc(uid).collection('accounts').get(),
+    db().collection('users').doc(uid).collection('transactions').get()
+  ]);
+
+  const creditAccounts: Array<{ bankName: string; creditMode: string; creditLimit: number; totalLoan: number; initialBalance: number; dueDate: number; monthlyInstallment: number; interestRate: number; id: string }> = [];
+  accSnap.forEach(d => {
+    const a = d.data();
+    if (a.accountType === 'credit') {
+      creditAccounts.push({
+        bankName: a.bankName,
+        creditMode: a.creditMode || 'revolving',
+        creditLimit: a.creditLimit || 0,
+        totalLoan: a.totalLoan || 0,
+        initialBalance: a.initialBalance || 0,
+        dueDate: a.dueDate,
+        monthlyInstallment: a.monthlyInstallment || 0,
+        interestRate: a.interestRate || 0,
+        id: d.id
+      });
+    }
+  });
+
+  if (!creditAccounts.length) {
+    await sendMessage(chatId, '📭 Belum ada akun kredit. Tambahkan di aplikasi web (Akun > Tambah > Tipe: Kredit).');
+    return;
+  }
+
+  const txns: Array<{ accountId?: string; transferToAccountId?: string; type: string; amount: number }> = [];
+  txSnap.forEach(d => {
+    const t = d.data();
+    txns.push({ accountId: t.accountId, transferToAccountId: t.transferToAccountId, type: t.type, amount: t.amount });
+  });
+
+  const lines: string[] = [];
+  const today = new Date().getDate();
+
+  // Group by mode
+  const revolving = creditAccounts.filter(a => a.creditMode !== 'installment');
+  const installment = creditAccounts.filter(a => a.creditMode === 'installment');
+
+  if (revolving.length > 0) {
+    lines.push('<b>💳 Revolving (Kartu Kredit / PayLater)</b>');
+    revolving.forEach(a => {
+      const net = txns
+        .filter(t => t.accountId === a.id || t.transferToAccountId === a.id)
+        .reduce((s, t) => {
+          if (t.type === 'transfer') {
+            if (t.accountId === a.id) return s + t.amount;
+            if (t.transferToAccountId === a.id) return s - t.amount;
+            return s;
+          }
+          if (t.accountId !== a.id) return s;
+          return s + (t.type === 'income' ? -t.amount : t.amount);
+        }, 0);
+      const usage = Math.max(0, a.initialBalance + net);
+      const limit = a.creditLimit;
+      const pct = limit > 0 ? Math.min(Math.round(usage / limit * 100), 100) : 0;
+      const available = Math.max(0, limit - usage);
+      let dueInfo = '';
+      if (a.dueDate) {
+        const dueClass = today > a.dueDate ? '⚠️' : (a.dueDate - today <= 3 ? '⚡' : '✅');
+        dueInfo = `  Jatuh Tempo: tgl ${a.dueDate} ${dueClass}`;
+      }
+      let minPay = '';
+      if (usage > 0) {
+        minPay = `  Min. Bayar: Rp ${formatCurrency(Math.round(usage * 0.1))}`;
+      }
+      lines.push(`• <b>${escapeHtml(a.bankName)}</b>\n  Terpakai: Rp ${formatCurrency(usage)} / Limit: Rp ${formatCurrency(limit)} (${pct}%)\n  Tersedia: Rp ${formatCurrency(available)}${dueInfo}${minPay}`);
+    });
+  }
+
+  if (installment.length > 0) {
+    if (revolving.length > 0) lines.push('');
+    lines.push('<b>🏠 Cicilan (KPR, Kendaraan, dll)</b>');
+    installment.forEach(a => {
+      const net = txns
+        .filter(t => t.transferToAccountId === a.id && t.type === 'transfer')
+        .reduce((s, t) => s + t.amount, 0);
+      const totalPaid = a.initialBalance + net;
+      const totalLoan = a.totalLoan;
+      const remaining = Math.max(0, totalLoan - totalPaid);
+      const pct = totalLoan > 0 ? Math.min(Math.round(totalPaid / totalLoan * 100), 100) : 0;
+      let extraInfo = '';
+      if (pct >= 100) {
+        extraInfo = '  Status: ✅ LUNAS';
+      } else if (a.monthlyInstallment > 0) {
+        const monthsLeft = Math.ceil(remaining / a.monthlyInstallment);
+        extraInfo = `  Cicilan: Rp ${formatCurrency(a.monthlyInstallment)}/bln · ${monthsLeft} bln lagi`;
+      }
+      lines.push(`• <b>${escapeHtml(a.bankName)}</b>\n  Terbayar: Rp ${formatCurrency(totalPaid)} / Total: Rp ${formatCurrency(totalLoan)} (${pct}%)\n  Sisa: Rp ${formatCurrency(remaining)}${extraInfo}`);
+    });
+  }
+
+  await sendMessage(chatId, '<b>💳 Kredit</b>\n\n' + lines.join('\n\n'));
+}
+
 export async function handleTransfer(chatId: number, text: string): Promise<void> {
   const uid = await getUid(chatId);
   if (!uid) { await sendMessage(chatId, '⚠️ Akun belum dihubungkan. Gunakan /link &lt;kode&gt; dulu.'); return; }
@@ -1274,4 +1488,115 @@ export async function handleBayar(chatId: number, text: string): Promise<void> {
     `Status: ${status === 'paid' ? '✅ Lunas' : status === 'partial' ? '🔄 Cicilan' : '⏳ Pending'}` +
     remainingLine
   );
+}
+
+export async function handleBuatAkun(chatId: number, text: string): Promise<void> {
+  const uid = await getUid(chatId);
+  if (!uid) { await sendMessage(chatId, '⚠️ Akun belum dihubungkan.'); return; }
+
+  const body = text.replace(/^\/buatakun\s+/, '').trim();
+  if (!body) {
+    await sendMessage(chatId,
+      '❌ Format: <code>/buatakun [nama] [tipe] [subtipe] [saldo?] [flags...]</code>\n\n' +
+      '<b>Tipe akun:</b> pasif, investasi, kredit\n\n' +
+      '<b>Sub tipe pasif:</b> Spending, Tabungan, Payroll\n' +
+      '<b>Sub tipe investasi:</b> Reksadana, Emas, Saham DN, Saham LN\n' +
+      '<b>Sub tipe kredit:</b> Revolving, Cicilan\n\n' +
+      '<b>Contoh dasar:</b>\n' +
+      '<code>/buatakun BCA pasif Spending 5000000</code>\n' +
+      '<code>/buatakun Bibit investasi Reksadana 2000000</code>\n\n' +
+      '<b>Contoh kredit revolving:</b>\n' +
+      '<code>/buatakun "BCA CC" kredit Revolving --limit 10000000 --bunga 24 --jatuhtempo 15</code>\n\n' +
+      '<b>Contoh kredit cicilan:</b>\n' +
+      '<code>/buatakun KPR kredit Cicilan --pinjaman 500000000 --bunga 12 --tenor 240</code>\n\n' +
+      '<b>Flags kredit:</b>\n' +
+      '<code>--limit</code> Limit kredit (revolving)\n' +
+      '<code>--bunga</code> Suku bunga per tahun (%)\n' +
+      '<code>--jatuhtempo</code> Tanggal jatuh tempo 1-28 (revolving)\n' +
+      '<code>--pinjaman</code> Total pinjaman (cicilan)\n' +
+      '<code>--tenor</code> Tenor dalam bulan (cicilan)\n' +
+      '<code>--cicilan</code> Cicilan per bulan (cicilan)'
+    );
+    return;
+  }
+
+  // Parse flags
+  const flags: Record<string, string> = {};
+  const flagNames = ['limit', 'bunga', 'jatuhtempo', 'pinjaman', 'tenor', 'cicilan'];
+  let cleanBody = body;
+  for (const f of flagNames) {
+    const re = new RegExp('--' + f + '\\s+(\\S+)', 'i');
+    const m = cleanBody.match(re);
+    if (m) {
+      flags[f] = m[1];
+      cleanBody = cleanBody.replace(m[0], '');
+    }
+  }
+  cleanBody = cleanBody.replace(/\s+/g, ' ').trim();
+
+  // Parse: [nama] [tipe] [subtipe] [saldo?]
+  // Handle quoted name: "BCA CC" or BCA\ CC
+  let remaining = cleanBody;
+  let bankName = '';
+  const quotedMatch = remaining.match(/^"([^"]+)"\s*/);
+  if (quotedMatch) {
+    bankName = quotedMatch[1];
+    remaining = remaining.slice(quotedMatch[0].length);
+  } else {
+    const parts = remaining.split(/\s+/);
+    if (parts.length < 2) {
+      await sendMessage(chatId, '❌ Minimal sebutkan nama dan tipe akun. Contoh: <code>/buatakun BCA pasif Spending</code>');
+      return;
+    }
+    // Consume first word as name
+    bankName = parts[0];
+    remaining = parts.slice(1).join(' ');
+  }
+
+  const parts = remaining.split(/\s+/);
+  const typeMap: Record<string, string> = { pasif: 'passive', investasi: 'investment', kredit: 'credit' };
+  const accountType = typeMap[parts[0]?.toLowerCase()] || '';
+  if (!accountType) {
+    await sendMessage(chatId, '❌ Tipe akun tidak dikenal: "' + (parts[0] || '') + '". Gunakan: pasif, investasi, atau kredit.');
+    return;
+  }
+
+  // Sub-type: may be 1-2 words (e.g. "Saham DN")
+  let accountSubType = parts[1] || '';
+  let nextIdx = 2;
+  if (accountSubType === 'Saham') {
+    accountSubType = 'Saham DN';
+    nextIdx = 3;
+  }
+
+  const initialBalance = parseAmount(parts[nextIdx] || '0');
+
+  const data: any = { bankName, accountType, accountSubType, initialBalance };
+
+  if (accountType === 'credit') {
+    if (flags.bunga) data.interestRate = parseFloat(flags.bunga);
+    if (accountSubType === 'Cicilan') {
+      if (flags.pinjaman) data.totalLoan = parseInt(flags.pinjaman);
+      if (flags.tenor) data.tenorMonths = parseInt(flags.tenor);
+      if (flags.cicilan) data.monthlyInstallment = parseInt(flags.cicilan);
+      data.startDate = new Date().toISOString().split('T')[0];
+    } else {
+      if (flags.limit) data.creditLimit = parseInt(flags.limit);
+      if (flags.jatuhtempo) data.dueDate = parseInt(flags.jatuhtempo);
+      data.minimumPaymentRate = 10;
+    }
+  }
+
+  try {
+    const result = await normalizeAndCreateAccount(uid, data);
+    await sendMessage(chatId,
+      '✅ <b>Akun dibuat!</b>\n\n' +
+      'Nama: ' + escapeHtml(result.bankName) + '\n' +
+      'Tipe: ' + result.accountType + '\n' +
+      'Sub Tipe: ' + (result.accountSubType || '-') + '\n' +
+      (initialBalance > 0 ? 'Saldo Awal: Rp ' + formatCurrency(initialBalance) : '')
+    );
+  } catch (err: any) {
+    await sendMessage(chatId, '❌ Gagal membuat akun: ' + escapeHtml(err.message));
+  }
 }

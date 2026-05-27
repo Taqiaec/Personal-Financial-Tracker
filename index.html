@@ -238,6 +238,61 @@
                     <div class="portfolio-total" id="portfolio-total"></div>
                     <div class="portfolio-list" id="portfolio-list"></div>
                 </div>
+                <div class="dash-bottom-row" id="dash-bottom-row" style="display:none;">
+                    <div class="credit-summary-section" id="credit-summary-section">
+                        <h3>Kredit</h3>
+                        <div class="credit-summary-total" id="credit-summary-total"></div>
+                        <div class="credit-summary-list" id="credit-summary-list"></div>
+                    </div>
+                    <div class="simulasi-section" id="simulasi-section">
+                        <h3>Simulasi Cicilan</h3>
+                        <p class="settings-hint">Hitung cicilan bulanan dan total bunga.</p>
+                        <div class="form-group">
+                            <label for="sim-jumlah">Jumlah Pinjaman (Rp)</label>
+                            <input type="number" id="sim-jumlah" min="0" placeholder="Contoh: 100000000" value="0">
+                        </div>
+                        <div class="form-group">
+                            <label for="sim-dp">Uang Muka / DP (Rp, opsional)</label>
+                            <input type="number" id="sim-dp" min="0" placeholder="0" value="0">
+                        </div>
+                        <div class="form-group">
+                            <label for="sim-bunga">Suku Bunga Tahunan (%)</label>
+                            <input type="number" id="sim-bunga" step="0.01" min="0" placeholder="Contoh: 12" value="0">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group form-group-half">
+                                <label for="sim-tenor">Tenor (Bulan)</label>
+                                <input type="number" id="sim-tenor" min="1" placeholder="12" value="12">
+                            </div>
+                            <div class="form-group form-group-half">
+                                <label for="sim-tipe">Tipe Bunga</label>
+                                <select id="sim-tipe">
+                                    <option value="efektif">Efektif / Anuitas</option>
+                                    <option value="flat">Flat</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button type="button" class="btn-primary" id="btn-hitung-simulasi">Hitung Simulasi</button>
+
+                        <div id="sim-hasil" style="display:none;margin-top:16px;">
+                            <div class="sim-result-card">
+                                <div class="sim-result-row"><span>Cicilan / Bulan</span><span id="sim-cicilan" class="sim-val-primary"></span></div>
+                                <div class="sim-result-row"><span>Total Bunga</span><span id="sim-total-bunga" class="sim-val-warn"></span></div>
+                                <div class="sim-result-row"><span>Total Bayar</span><span id="sim-total-bayar" class="sim-val-bold"></span></div>
+                                <div class="sim-result-row"><span>Rasio Bunga</span><span id="sim-rasio"></span></div>
+                            </div>
+
+                            <div class="sim-amort-table-wrap">
+                                <table class="sim-amort-table" id="sim-amort-table">
+                                    <thead><tr><th>Bln</th><th>Cicilan</th><th>Pokok</th><th>Bunga</th><th>Sisa</th></tr></thead>
+                                    <tbody id="sim-amort-body"></tbody>
+                                </table>
+                            </div>
+
+                            <button type="button" class="btn-secondary" id="btn-buat-akun-cicilan" style="margin-top:12px;width:100%;">Buat Akun Cicilan</button>
+                        </div>
+                    </div>
+                </div>
             </section>
 
             <!-- TRANSACTIONS -->
@@ -506,6 +561,7 @@
                 </div>
                 <div id="debt-list"></div>
             </section>
+
         </main>
 
         <!-- Investment Adjustment Modal -->
@@ -557,6 +613,7 @@
                         <select id="acc-type">
                             <option value="passive">Pasif (Rekening Bank)</option>
                             <option value="investment">Investasi</option>
+                            <option value="credit">Kredit (Kartu Kredit, Cicilan, KPR, dll)</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -568,6 +625,53 @@
                     <div class="form-group">
                         <label for="acc-balance">Saldo Awal (Rp)</label>
                         <input type="number" id="acc-balance" required min="0" placeholder="0" value="0">
+                    </div>
+                    <!-- Credit-specific fields (hidden by default) -->
+                    <div id="credit-fields" style="display:none;">
+                        <div id="credit-fields-revolving">
+                            <div class="form-group">
+                                <label for="acc-credit-limit">Limit Kredit (Rp)</label>
+                                <input type="number" id="acc-credit-limit" min="0" placeholder="Contoh: 10000000" value="0">
+                            </div>
+                            <div class="form-group">
+                                <label for="acc-interest-rate">Suku Bunga Tahunan (%)</label>
+                                <input type="number" id="acc-interest-rate" step="0.01" min="0" placeholder="Contoh: 24" value="0">
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group form-group-half">
+                                    <label for="acc-due-date">Tgl Jatuh Tempo</label>
+                                    <input type="number" id="acc-due-date" min="1" max="28" placeholder="15" value="15">
+                                </div>
+                                <div class="form-group form-group-half">
+                                    <label for="acc-min-payment-rate">Min. Payment (%)</label>
+                                    <input type="number" id="acc-min-payment-rate" step="0.01" min="0" placeholder="10" value="10">
+                                </div>
+                            </div>
+                        </div>
+                        <div id="credit-fields-installment" style="display:none;">
+                            <div class="form-group">
+                                <label for="acc-total-loan">Total Pinjaman (Rp)</label>
+                                <input type="number" id="acc-total-loan" min="0" placeholder="Contoh: 50000000" value="0">
+                            </div>
+                            <div class="form-group">
+                                <label for="acc-interest-rate-inst">Suku Bunga Tahunan (%)</label>
+                                <input type="number" id="acc-interest-rate-inst" step="0.01" min="0" placeholder="Contoh: 12" value="0">
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group form-group-half">
+                                    <label for="acc-tenor-months">Tenor (Bulan)</label>
+                                    <input type="number" id="acc-tenor-months" min="1" placeholder="12" value="12">
+                                </div>
+                                <div class="form-group form-group-half">
+                                    <label for="acc-monthly-installment">Cicilan/Bulan (Rp)</label>
+                                    <input type="number" id="acc-monthly-installment" min="0" placeholder="0" value="0">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="acc-start-date">Tanggal Mulai</label>
+                                <input type="date" id="acc-start-date">
+                            </div>
+                        </div>
                     </div>
                     <button type="submit" class="btn-primary" id="modal-submit-btn">Simpan Akun</button>
                 </form>
