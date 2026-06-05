@@ -436,6 +436,10 @@ function populateAccountSelect() {
     var select = document.getElementById('tx-account');
     var curVal = select.value;
     select.innerHTML = '<option value="">-- Pilih Akun --</option>';
+    var cashOpt = document.createElement('option');
+    cashOpt.value = '__cash__';
+    cashOpt.textContent = 'Cash (Tanpa Akun)';
+    select.appendChild(cashOpt);
     accCache.forEach(function (a) {
         var opt = document.createElement('option');
         opt.value = a.id;
@@ -467,6 +471,7 @@ document.getElementById('transaction-form').addEventListener('submit', function 
     var amount = parseInt(document.getElementById('amount').value);
     var date = document.getElementById('date').value;
     var accountId = document.getElementById('tx-account').value;
+    if (accountId === '__cash__') accountId = '';
 
     if (!desc || !amount || !date) return;
     if (!uid) return;
@@ -531,20 +536,21 @@ document.getElementById('transaction-form').addEventListener('submit', function 
 
     // --- Income/Expense path ---
     var category = document.getElementById('category').value;
-    if (!accountId) return;
 
-    // Credit account validation
-    var txAccount = getAccountById(accountId);
-    if (txAccount && txAccount.accountType === 'credit') {
-        if (getCreditMode(txAccount) === 'installment') {
-            showToast('Akun cicilan hanya untuk pembayaran (transfer masuk), bukan pengeluaran.');
-            return;
-        }
-        if (currentType === 'expense' && txAccount.creditLimit > 0) {
-            var currentUsage = getCreditUsage(txAccount);
-            if ((currentUsage + amount) > txAccount.creditLimit) {
-                if (!confirm('Transaksi ini akan melebihi limit kredit Rp ' + formatCurrency(txAccount.creditLimit) + '. Lanjutkan?')) {
-                    return;
+    // Credit account validation (only when account is selected)
+    if (accountId) {
+        var txAccount = getAccountById(accountId);
+        if (txAccount && txAccount.accountType === 'credit') {
+            if (getCreditMode(txAccount) === 'installment') {
+                showToast('Akun cicilan hanya untuk pembayaran (transfer masuk), bukan pengeluaran.');
+                return;
+            }
+            if (currentType === 'expense' && txAccount.creditLimit > 0) {
+                var currentUsage = getCreditUsage(txAccount);
+                if ((currentUsage + amount) > txAccount.creditLimit) {
+                    if (!confirm('Transaksi ini akan melebihi limit kredit Rp ' + formatCurrency(txAccount.creditLimit) + '. Lanjutkan?')) {
+                        return;
+                    }
                 }
             }
         }
@@ -556,7 +562,7 @@ document.getElementById('transaction-form').addEventListener('submit', function 
         type: currentType,
         category: category,
         date: date,
-        accountId: accountId
+        accountId: accountId || ''
     };
 
     // Clean up transfer-only fields when editing to non-transfer type
@@ -1472,6 +1478,21 @@ function renderBudgetProgress() {
         catMap[t.category] = (catMap[t.category] || 0) + t.amount;
     });
 
+    // Subtract paid piutang from split bill expenses
+    var monthPiutang = debtCache.filter(function (d) {
+        return d.type === 'piutang' && getMonthKey(d.date, getPaydayStart(d.date.slice(0, 7))) === currentMonth;
+    });
+    monthPiutang.forEach(function (d) {
+        var paid = d.amount - (d.remainingAmount != null ? d.remainingAmount : d.amount);
+        if (paid <= 0) return;
+        var matchTx = monthTxns.find(function (t) {
+            return t.desc === d.description && t.date === d.date;
+        });
+        if (matchTx && catMap[matchTx.category]) {
+            catMap[matchTx.category] = Math.max(0, catMap[matchTx.category] - paid);
+        }
+    });
+
     var items = [];
     Object.keys(budgetCache).forEach(function (cat) {
         var limit = budgetCache[cat];
@@ -1522,6 +1543,21 @@ function renderBudgetAlerts() {
     var catMap = {};
     monthTxns.forEach(function (t) {
         catMap[t.category] = (catMap[t.category] || 0) + t.amount;
+    });
+
+    // Subtract paid piutang from split bill expenses
+    var monthPiutang = debtCache.filter(function (d) {
+        return d.type === 'piutang' && getMonthKey(d.date, getPaydayStart(d.date.slice(0, 7))) === currentMonth;
+    });
+    monthPiutang.forEach(function (d) {
+        var paid = d.amount - (d.remainingAmount != null ? d.remainingAmount : d.amount);
+        if (paid <= 0) return;
+        var matchTx = monthTxns.find(function (t) {
+            return t.desc === d.description && t.date === d.date;
+        });
+        if (matchTx && catMap[matchTx.category]) {
+            catMap[matchTx.category] = Math.max(0, catMap[matchTx.category] - paid);
+        }
     });
 
     var alerts = [];

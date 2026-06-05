@@ -3,7 +3,7 @@ import * as admin from 'firebase-admin';
 import { handleStart, handleHelp, handleLink, handleSaldo, handleTambah, handleBulanIni, handleAkun, handleKredit, handlePhoto, handleFreeText, handleStatistik, handleBanding, handleTransfer, handleHutang, handlePiutang, handleBayar, handleBuatAkun } from './commands';
 import { sendMessage } from './telegram';
 export { callGemini } from './gemini';
-export { dailyRecap, weeklyRecap, monthlyCreditInterest } from './scheduler';
+export { weeklyRecap, monthlyCreditInterest } from './scheduler';
 
 admin.initializeApp();
 

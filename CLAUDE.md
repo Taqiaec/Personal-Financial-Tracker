@@ -27,11 +27,11 @@ Personal finance tracker — SPA hosted on Firebase with a Telegram bot companio
 
 | File | Purpose |
 |---|---|
-| `functions/src/index.ts` | Entry point: `telegramWebhook` (onRequest) receives Telegram updates, routes to command handlers. Re-exports `callGemini`, `dailyRecap`, `weeklyRecap`. Uses secrets: `TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`. |
+| `functions/src/index.ts` | Entry point: `telegramWebhook` (onRequest) receives Telegram updates, routes to command handlers. Re-exports `callGemini`, `weeklyRecap`, `monthlyCreditInterest`. Uses secrets: `TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`. |
 | `functions/src/commands.ts` | Telegram bot handlers: `/start`, `/help`, `/link`, `/saldo`, `/tambah`, `/pemasukan`, `/transfer`, `/bulanini`, `/statistik`, `/banding`, `/akun`. Also `handlePhoto()` (receipt scan with caption), `handleFreeText()` (natural language input), `normalizeAndCreateTransaction()` (shared create logic, handles income/expense/transfer + admin fee + debt + split bill routing). `normalizeAndCreateDebt()` for hutang/piutang. `normalizeAndCreateSplitBill()` for patungan (atomic expense + debts via `runTransaction`). All in Bahasa Indonesia. Uses Admin SDK (bypasses Firestore rules). |
 | `functions/src/telegram.ts` | `sendMessage(chatId, text, parseMode)` — calls Telegram Bot API via `fetch()`. `downloadPhotoAsBase64(fileId)` — downloads photo from Telegram servers (no resize). `downloadAndResizePhoto(fileId, maxDim?)` — downloads + resizes via `sharp` (max 1200px, 80% JPEG) before base64 encoding, used by `handlePhoto` to keep Gemini payload small. `escapeHtml()` for HTML-safe output. |
 | `functions/src/gemini.ts` | `callGemini` (onCall) — auth-gated proxy to Gemini 2.5 Flash for receipt scanning. `callGeminiAPI(parts)` — reusable API caller used by bot handlers. Detects safety filter blocks (`promptFeedback.blockReason`, `finishReason: SAFETY`), empty candidates, and empty text responses — throws descriptive errors in Indonesian for each case. `buildScanPrompt()` and `buildNaturalLanguagePrompt()` with Indonesian category descriptions, few-shot examples, transfer detection, debt/piutang detection, and split bill (patungan) detection. Uses secret: `GEMINI_API_KEY`. |
-| `functions/src/scheduler.ts` | `dailyRecap` (every day 9pm WIB) and `weeklyRecap` (Sunday 9pm WIB) — PubSub scheduled functions. Query all linked Telegram users, summarize transactions, send recap messages. |
+| `functions/src/scheduler.ts` | `weeklyRecap` (Sunday 9pm WIB) and `monthlyCreditInterest` (daily 1am WIB) — PubSub scheduled functions. Query all linked Telegram users, summarize transactions, send recap messages. |
 | `functions/package.json` | Dependencies: `firebase-admin@^12`, `firebase-functions@^5`, `sharp@^0.34`. Build: `tsc`. |
 | `functions/tsconfig.json` | Target ES2020, module commonjs, outDir `lib`, rootDir `src`. |
 
@@ -41,10 +41,10 @@ All user data under `users/{uid}/`. In-memory caches (`txCache`, `accCache`, `se
 
 | Path | Fields | Notes |
 |---|---|---|
-| `users/{uid}/transactions/{id}` | `{ desc, amount, type, category, date, accountId, createdAt, transferToAccountId? }` | `type` = `"income"` / `"expense"` / `"transfer"`. `accountId` can be empty string. `transferToAccountId` only for transfer type. Listener ordered by `createdAt` desc. |
+| `users/{uid}/transactions/{id}` | `{ desc, amount, type, category, date, accountId, createdAt, transferToAccountId? }` | `type` = `"income"` / `"expense"` / `"transfer"`. `accountId` empty string = unassigned/cash expense (doesn't affect any account balance but counted in charts + budget). `transferToAccountId` only for transfer type. Listener ordered by `createdAt` desc. |
 | `users/{uid}/accounts/{id}` | `{ bankName, accountType, accountSubType, initialBalance, currentValue, lastAdjustedAt }` | `accountType` = `"passive"` / `"investment"`. `accountSubType` e.g. "Spending", "Reksadana". `currentValue` (investment only): latest mark-to-market value. Passive balance = `initialBalance + net(transactions)`. Investment balance = `currentValue` (falls back to `initialBalance` if not set). |
 | `users/{uid}/accounts/{id}/adjustments/{autoId}` | `{ date, previousValue, newValue, difference, createdAt }` | Investment P/L records. One record per manual adjustment. `difference` = newValue − previousValue (positive=profit, negative=loss). |
-| `users/{uid}/settings/accountSubTypes` | `{ passive: string[], investment: string[] }` | Custom sub-type lists. Falls back to `ACCOUNT_SUB_TYPE_DEFAULTS` if doc doesn't exist. |
+| `users/{uid}/settings/accountSubTypes` | `{ passive: string[], investment: string[], credit: string[] }` | Custom sub-type lists. Falls back to `ACCOUNT_SUB_TYPE_DEFAULTS` if doc doesn't exist. |
 | `users/{uid}/profile/data` | `{ username, email, createdAt }` | Created at signup. |
 | `users/{uid}/settings/main` | `{ paydayStart, geminiApiKey }` | `paydayStart` defaults to 1, max 28. |
 | `users/{uid}/settings/paydayOverrides` | `{ "YYYY-MM": number }` | Monthly payday exceptions. e.g. `{ "2026-06": 26 }`. `getPaydayStart(monthKey)` checks this first, falls back to default. |
@@ -82,9 +82,9 @@ Nav click handler at `app.js:~312` explicitly maps each page. When adding pages,
 ## Key patterns
 
 - **Compat SDK (global scope)**: All Firebase calls use `firebase.firestore()`, `firebase.auth()`, `firebase.functions()` — NOT modular `import` syntax. Globals `db`, `auth` from `firebase-config.js`.
-- **Account balance is dynamic**: `getAccountDisplayBalance()` — for passive accounts: `initialBalance + net(transactions)`. For investment accounts: `currentValue` (falls back to `initialBalance` if null). Dashboard total = sum of all account display balances + unassigned transactions.
+- **Account balance is dynamic**: `getAccountDisplayBalance()` — for passive accounts: `initialBalance + net(transactions)`. For investment accounts: `currentValue` (falls back to `initialBalance` if null). For credit accounts: negative (usage or remaining loan). Dashboard total = sum of all account display balances + unassigned transactions (cash expenses reduce total).
 - **Investment mark-to-market**: Investment account cards show "Adjust" button. Opens modal with current balance (readonly), new balance input, date picker, and live P/L preview. Submit writes adjustment record to `users/{uid}/accounts/{id}/adjustments/` and updates account's `currentValue` + `lastAdjustedAt`. Dashboard portfolio card shows investment accounts with current values and month P/L.
-- **Sub-types**: Customizable per main type via Accounts page ("Kelola Sub Tipe Akun" — expandable section below account grid, collapsed by default). Defaults: passive → Spending/Tabungan/Payroll, investment → Reksadana/Emas/Saham DN/Saham LN. Stored in `settings/accountSubTypes`, falls back to `ACCOUNT_SUB_TYPE_DEFAULTS`.
+- **Sub-types**: Customizable per main type via Accounts page ("Kelola Sub Tipe Akun" — expandable section below account grid, collapsed by default). Defaults: passive → Spending/Tabungan/Payroll, investment → Reksadana/Emas/Saham DN/Saham LN, credit → Revolving/Cicilan. Stored in `settings/accountSubTypes`, falls back to `ACCOUNT_SUB_TYPE_DEFAULTS`.
 - **Event delegation**: Transaction edit/delete via `.closest('.tx-edit')` / `.closest('.tx-delete')`. Account edit/delete/adjust via `[data-edit-account]` / `[data-delete-account]` / `[data-adjust-account]` attributes. Document-level listeners.
 - **Toast**: `showToast(msg)` creates/reuses `#toast` div, auto-hides 2.2s.
 - **Modal**: `#account-modal` toggled via `.show` class. `openAccountModal(account?)` — with account = edit mode, without = add mode.
@@ -137,9 +137,9 @@ Bot: [@Fintracker_Takii_Bot](https://t.me/Fintracker_Takii_Bot). Webhook: `teleg
 2. Text starting with `/` → command routing
 3. Other text → `handleFreeText()` — natural language input via Gemini (supports Indonesian slang: goceng=5000, goban=50000, ceban=10000, ceceng=100000, etc.). Detects transfer intent, debt/piutang intent, split bill (patungan) intent, and admin fee. Routing priority: split bill > debt > transfer > normal income/expense.
 
-**Commands**: `/start`, `/help`, `/link CODE`, `/saldo`, `/tambah JML KATEGORI DESC`, `/pemasukan JML KATEGORI DESC`, `/transfer JML AKUN_ASAL ke AKUN_TUJUAN DESC`, `/bulanini`, `/statistik` (text-based pie chart), `/banding` (month-vs-month comparison), `/akun`.
+**Commands**: `/start`, `/help`, `/link CODE`, `/saldo`, `/tambah JML KATEGORI DESC`, `/pemasukan JML KATEGORI DESC`, `/transfer JML AKUN_ASAL ke AKUN_TUJUAN DESC`, `/bulanini`, `/statistik` (text-based pie chart), `/banding` (month-vs-month comparison), `/akun`, `/kredit`, `/hutang`, `/piutang`, `/bayar JML NAMA AKUN? CATATAN?`, `/buatakun NAMA TIPE SUBTIPE SALDO? [flags]`.
 
-**Scheduled**: `dailyRecap` (9pm WIB daily) + `weeklyRecap` (9pm WIB Sundays). Iterate `telegramUsers`, query per-user transactions, send HTML recap.
+**Scheduled**: `weeklyRecap` (9pm WIB Sundays). Iterate `telegramUsers`, query per-user transactions, send HTML recap.
 
 ## How to run / deploy
 
