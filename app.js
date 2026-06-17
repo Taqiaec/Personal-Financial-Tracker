@@ -595,10 +595,21 @@ document.getElementById('transaction-form').addEventListener('submit', function 
     var accountId = document.getElementById('tx-account').value;
     if (accountId === '__cash__') accountId = '';
 
-    if (!desc || !amount || !date) return;
+    if (!desc) { showToast('Deskripsi harus diisi'); return; }
+    if (!amount) { showToast('Jumlah harus diisi'); return; }
+    if (!date) { showToast('Tanggal harus diisi'); return; }
     if (!uid) return;
 
     var editId = document.getElementById('edit-tx-id').value;
+    var submitBtn = document.getElementById('submit-tx-btn');
+    var originalBtnText = submitBtn.textContent;
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span class="spinner"></span> Menyimpan...';
+
+    function resetSubmitBtn() {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalBtnText;
+    }
 
     // --- Transfer path ---
     if (currentType === 'transfer') {
@@ -649,8 +660,10 @@ document.getElementById('transaction-form').addEventListener('submit', function 
                 }).catch(function (err) { console.error('Admin fee save failed:', err); });
             }
             resetTransactionForm();
+            resetSubmitBtn();
             showToast('Transfer berhasil disimpan!');
         }).catch(function (err) {
+            resetSubmitBtn();
             showToast('Gagal menyimpan: ' + err.message);
         });
         return;
@@ -749,16 +762,20 @@ document.getElementById('transaction-form').addEventListener('submit', function 
                 resetTransactionForm();
                 resetSplitBillForm();
                 updateCategoryOptions();
+                resetSubmitBtn();
                 showToast('Split bill disimpan! 1 expense + ' + splitDebtData.length + ' piutang');
             }).catch(function (err) {
+                resetSubmitBtn();
                 showToast('Gagal menyimpan piutang: ' + err.message);
             });
         } else {
             resetTransactionForm();
             updateCategoryOptions();
+            resetSubmitBtn();
             showToast(editId ? 'Transaksi diperbarui!' : 'Transaksi berhasil disimpan!');
         }
     }).catch(function (err) {
+        resetSubmitBtn();
         showToast('Gagal menyimpan: ' + err.message);
     });
 });
@@ -1280,38 +1297,187 @@ function editTransaction(id) {
     var tx = txCache.find(function (t) { return t.id === id; });
     if (!tx) return;
 
-    // Set type tabs
-    currentType = tx.type;
-    typeTabs.querySelectorAll('.type-tab').forEach(function (t) { t.classList.remove('active'); });
-    var targetTab = typeTabs.querySelector('[data-type="' + tx.type + '"]');
-    if (targetTab) targetTab.classList.add('active');
-    updateFormForType();
-
-    document.getElementById('desc').value = tx.desc;
-    document.getElementById('amount').value = tx.amount;
-    document.getElementById('date').value = tx.date;
-    document.getElementById('tx-account').value = tx.accountId || '';
-    document.getElementById('edit-tx-id').value = tx.id;
-
-    if (tx.type === 'transfer') {
-        populateTransferToAccountSelect();
-        document.getElementById('tx-transfer-to-account').value = tx.transferToAccountId || '';
-    } else {
-        updateCategoryOptions();
-        document.getElementById('category').value = tx.category;
+    // Route debt to debt-modal
+    if (tx.type === 'debt') {
+        var debt = debtCache.find(function (d) { return d.id === id; });
+        if (debt) openDebtModal(debt);
+        return;
     }
 
-    document.querySelector('#page-add .form-card h2').textContent = 'Edit Transaksi';
-    document.getElementById('submit-tx-btn').textContent = 'Update Transaksi';
-    document.getElementById('btn-cancel-edit').style.display = '';
-
-    // Navigate to add page
-    document.querySelectorAll('.nav-btn').forEach(function (b) { b.classList.remove('active'); });
-    document.querySelector('[data-page="add"]').classList.add('active');
-    document.querySelectorAll('.page').forEach(function (p) { p.classList.remove('active'); });
-    document.getElementById('page-add').classList.add('active');
-    document.getElementById('page-add').scrollIntoView({ behavior: 'smooth' });
+    openTxModal(tx);
 }
+
+// === TRANSACTION EDIT MODAL ===
+var txModal = document.getElementById('tx-modal');
+var currentTxType = 'expense';
+
+function openTxModal(tx) {
+    document.getElementById('tx-modal-title').textContent = 'Edit Transaksi';
+    document.getElementById('tx-submit-btn').textContent = 'Simpan Perubahan';
+    document.getElementById('tx-edit-id').value = tx.id;
+
+    document.getElementById('tx-desc').value = tx.desc;
+    document.getElementById('tx-amount').value = tx.amount;
+    document.getElementById('tx-date').value = tx.date;
+
+    // Set type tabs
+    currentTxType = tx.type;
+    var txTypeTabs = document.getElementById('tx-type-tabs');
+    txTypeTabs.querySelectorAll('.type-tab').forEach(function (t) { t.classList.remove('active'); });
+    var targetTab = txTypeTabs.querySelector('[data-type="' + tx.type + '"]');
+    if (targetTab) targetTab.classList.add('active');
+
+    updateTxModalForm();
+
+    // Populate account select
+    var txAccountSelect = document.getElementById('tx-account');
+    txAccountSelect.innerHTML = '<option value="">-- Pilih Akun --</option>';
+    var cashOpt = document.createElement('option');
+    cashOpt.value = '__cash__';
+    cashOpt.textContent = 'Cash (Tanpa Akun)';
+    txAccountSelect.appendChild(cashOpt);
+    accCache.forEach(function (a) {
+        var opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = a.bankName + ' (' + getAccountTypeLabel(a.accountType) + ')';
+        txAccountSelect.appendChild(opt);
+    });
+    txAccountSelect.value = tx.accountId || '';
+
+    if (tx.type === 'transfer') {
+        // Populate transfer-to select
+        var txTransferSelect = document.getElementById('tx-transfer-to-account');
+        txTransferSelect.innerHTML = '<option value="">-- Pilih Akun Tujuan --</option>';
+        accCache.forEach(function (a) {
+            var opt = document.createElement('option');
+            opt.value = a.id;
+            opt.textContent = a.bankName + ' (' + getAccountTypeLabel(a.accountType) + ')';
+            txTransferSelect.appendChild(opt);
+        });
+        txTransferSelect.value = tx.transferToAccountId || '';
+    } else {
+        // Populate category select
+        var txCategorySelect = document.getElementById('tx-category');
+        txCategorySelect.innerHTML = '';
+        CATEGORIES[tx.type].forEach(function (cat) {
+            var opt = document.createElement('option');
+            opt.value = cat;
+            opt.textContent = cat;
+            txCategorySelect.appendChild(opt);
+        });
+        txCategorySelect.value = tx.category;
+    }
+
+    txModal.classList.add('show');
+}
+
+function closeTxModal() {
+    document.getElementById('tx-form').reset();
+    document.getElementById('tx-edit-id').value = '';
+    document.getElementById('tx-date').value = new Date().toISOString().slice(0, 10);
+    currentTxType = 'expense';
+    var txTypeTabs = document.getElementById('tx-type-tabs');
+    txTypeTabs.querySelectorAll('.type-tab').forEach(function (t) { t.classList.remove('active'); });
+    txTypeTabs.querySelector('[data-type="expense"]').classList.add('active');
+    updateTxModalForm();
+    txModal.classList.remove('show');
+}
+
+function updateTxModalForm() {
+    var isTransfer = currentTxType === 'transfer';
+    document.getElementById('tx-category-group').style.display = isTransfer ? 'none' : '';
+    document.getElementById('tx-source-account-label').textContent = isTransfer ? 'Akun Asal' : 'Akun';
+    document.getElementById('tx-transfer-to-group').style.display = isTransfer ? '' : 'none';
+}
+
+// Modal type tabs
+document.getElementById('tx-type-tabs').addEventListener('click', function (e) {
+    var tab = e.target.closest('.type-tab');
+    if (!tab) return;
+    currentTxType = tab.dataset.type;
+    document.querySelectorAll('#tx-type-tabs .type-tab').forEach(function (t) { t.classList.remove('active'); });
+    tab.classList.add('active');
+    updateTxModalForm();
+    // Update category options
+    if (currentTxType !== 'transfer') {
+        var txCategorySelect = document.getElementById('tx-category');
+        txCategorySelect.innerHTML = '';
+        CATEGORIES[currentTxType].forEach(function (cat) {
+            var opt = document.createElement('option');
+            opt.value = cat;
+            opt.textContent = cat;
+            txCategorySelect.appendChild(opt);
+        });
+    }
+});
+
+// Modal submit
+document.getElementById('tx-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var desc = document.getElementById('tx-desc').value.trim();
+    var amount = parseInt(document.getElementById('tx-amount').value);
+    var date = document.getElementById('tx-date').value;
+    var editId = document.getElementById('tx-edit-id').value;
+
+    if (!desc) { showToast('Deskripsi harus diisi'); return; }
+    if (!amount) { showToast('Jumlah harus diisi'); return; }
+    if (!date) { showToast('Tanggal harus diisi'); return; }
+    if (!uid || !editId) return;
+
+    var submitBtn = document.getElementById('tx-submit-btn');
+    var originalText = submitBtn.textContent;
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span class="spinner"></span> Menyimpan...';
+
+    var txData = {
+        desc: desc,
+        amount: amount,
+        type: currentTxType,
+        date: date,
+        accountId: document.getElementById('tx-account').value || ''
+    };
+
+    if (currentTxType === 'transfer') {
+        txData.category = '';
+        txData.transferToAccountId = document.getElementById('tx-transfer-to-account').value;
+        if (!txData.accountId || !txData.transferToAccountId) {
+            showToast('Akun asal dan tujuan harus dipilih');
+            submitBtn.disabled = false;
+            submitBtn.textContent = originalText;
+            return;
+        }
+        if (txData.accountId === txData.transferToAccountId) {
+            showToast('Akun asal dan tujuan tidak boleh sama');
+            submitBtn.disabled = false;
+            submitBtn.textContent = originalText;
+            return;
+        }
+    } else {
+        txData.category = document.getElementById('tx-category').value;
+        txData.transferToAccountId = firebase.firestore.FieldValue.delete();
+    }
+
+    db.collection('users').doc(uid).collection('transactions').doc(editId).update(txData)
+        .then(function () {
+            closeTxModal();
+            showToast('Transaksi diperbarui!');
+        })
+        .catch(function (err) {
+            showToast('Gagal menyimpan: ' + err.message);
+            submitBtn.disabled = false;
+            submitBtn.textContent = originalText;
+        });
+});
+
+// Modal close handlers
+document.getElementById('tx-modal-close').addEventListener('click', closeTxModal);
+document.getElementById('tx-cancel-btn').addEventListener('click', closeTxModal);
+txModal.addEventListener('click', function (e) {
+    if (e.target === txModal) closeTxModal();
+});
+document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && txModal.classList.contains('show')) closeTxModal();
+});
 
 function resetTransactionForm() {
     document.getElementById('transaction-form').reset();
@@ -2221,8 +2387,21 @@ document.getElementById('account-form').addEventListener('submit', function (e) 
     var accountSubType = accSubTypeInput.value;
     var initialBalance = parseInt(accBalanceInput.value) || 0;
 
-    if (!bankName) return;
+    if (!bankName) {
+        showToast('Nama bank harus diisi');
+        return;
+    }
     if (!uid) return;
+
+    var modalSubmitBtn = document.getElementById('modal-submit-btn');
+    var origAccBtnText = modalSubmitBtn.textContent;
+    modalSubmitBtn.disabled = true;
+    modalSubmitBtn.innerHTML = '<span class="spinner"></span> Menyimpan...';
+
+    function resetAccSubmitBtn() {
+        modalSubmitBtn.disabled = false;
+        modalSubmitBtn.textContent = origAccBtnText;
+    }
 
     var data = {
         bankName: bankName,
@@ -2252,8 +2431,10 @@ document.getElementById('account-form').addEventListener('submit', function (e) 
         // Edit mode
         db.collection('users').doc(uid).collection('accounts').doc(id).update(data).then(function () {
             closeAccountModal();
+            resetAccSubmitBtn();
             showToast('Akun berhasil diperbarui!');
         }).catch(function (err) {
+            resetAccSubmitBtn();
             showToast('Gagal memperbarui: ' + err.message);
         });
     } else {
@@ -2261,8 +2442,10 @@ document.getElementById('account-form').addEventListener('submit', function (e) 
         data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
         db.collection('users').doc(uid).collection('accounts').add(data).then(function () {
             closeAccountModal();
+            resetAccSubmitBtn();
             showToast('Akun berhasil ditambahkan!');
         }).catch(function (err) {
+            resetAccSubmitBtn();
             showToast('Gagal menambah: ' + err.message);
         });
     }
@@ -2438,6 +2621,11 @@ document.getElementById('debt-form').addEventListener('submit', function (e) {
         return;
     }
 
+    var debtSubmitBtn = document.getElementById('debt-submit-btn');
+    var origDebtBtnText = debtSubmitBtn.textContent;
+    debtSubmitBtn.disabled = true;
+    debtSubmitBtn.innerHTML = '<span class="spinner"></span> Menyimpan...';
+
     var debtData = {
         person: person,
         type: type,
@@ -2469,9 +2657,13 @@ document.getElementById('debt-form').addEventListener('submit', function (e) {
                 showToast('Hutang/piutang berhasil diupdate');
                 debtModal.classList.remove('show');
                 editingDebtId = null;
+                debtSubmitBtn.disabled = false;
+                debtSubmitBtn.textContent = origDebtBtnText;
             })
             .catch(function (err) {
                 showToast('Gagal mengupdate: ' + err.message);
+                debtSubmitBtn.disabled = false;
+                debtSubmitBtn.textContent = origDebtBtnText;
             });
     } else {
         // Create new
@@ -2484,9 +2676,13 @@ document.getElementById('debt-form').addEventListener('submit', function (e) {
                 showToast('Hutang/piutang berhasil ditambahkan');
                 debtModal.classList.remove('show');
                 editingDebtId = null;
+                debtSubmitBtn.disabled = false;
+                debtSubmitBtn.textContent = origDebtBtnText;
             })
             .catch(function (err) {
                 showToast('Gagal menambahkan: ' + err.message);
+                debtSubmitBtn.disabled = false;
+                debtSubmitBtn.textContent = origDebtBtnText;
             });
     }
 });
@@ -2551,6 +2747,11 @@ document.getElementById('payment-form').addEventListener('submit', function (e) 
         if (!confirm('Pembayaran Rp ' + formatCurrency(payAmount) + ' melebihi sisa Rp ' + formatCurrency(remaining) + '. Lanjutkan?')) return;
     }
 
+    var paySubmitBtn = document.querySelector('#payment-form button[type="submit"]');
+    var origPayBtnText = paySubmitBtn.textContent;
+    paySubmitBtn.disabled = true;
+    paySubmitBtn.innerHTML = '<span class="spinner"></span> Menyimpan...';
+
     var payments = (debtPaymentsCache[debtId] || []).slice();
     payments.push({
         amount: payAmount,
@@ -2609,8 +2810,12 @@ document.getElementById('payment-form').addEventListener('submit', function (e) 
     }).then(function () {
         showToast('Pembayaran berhasil dicatat');
         paymentModal.classList.remove('show');
+        paySubmitBtn.disabled = false;
+        paySubmitBtn.textContent = origPayBtnText;
     }).catch(function (err) {
         showToast('Gagal mencatat pembayaran: ' + err.message);
+        paySubmitBtn.disabled = false;
+        paySubmitBtn.textContent = origPayBtnText;
     });
 });
 

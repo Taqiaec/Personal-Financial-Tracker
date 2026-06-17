@@ -825,6 +825,58 @@
                 </form>
             </div>
         </div>
+
+        <!-- Transaction Edit Modal -->
+        <div class="modal-overlay" id="tx-modal">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3 id="tx-modal-title">Edit Transaksi</h3>
+                    <button class="modal-close" id="tx-modal-close">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
+                <form id="tx-form">
+                    <input type="hidden" id="tx-edit-id">
+                    <div class="form-group">
+                        <label for="tx-desc">Deskripsi</label>
+                        <input type="text" id="tx-desc" required placeholder="Contoh: Gaji bulan Mei">
+                    </div>
+                    <div class="form-group">
+                        <label for="tx-amount">Jumlah (Rp)</label>
+                        <input type="number" id="tx-amount" required min="1" placeholder="1000000">
+                    </div>
+                    <div class="type-tabs" id="tx-type-tabs">
+                        <button type="button" class="type-tab active" data-type="expense">Pengeluaran</button>
+                        <button type="button" class="type-tab" data-type="income">Pemasukan</button>
+                        <button type="button" class="type-tab" data-type="transfer">Transfer</button>
+                    </div>
+                    <div class="form-group" id="tx-category-group">
+                        <label for="tx-category">Kategori</label>
+                        <select id="tx-category"></select>
+                    </div>
+                    <div class="form-group" id="tx-source-account-group">
+                        <label for="tx-account" id="tx-source-account-label">Akun</label>
+                        <select id="tx-account">
+                            <option value="">-- Pilih Akun --</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="tx-transfer-to-group" style="display:none;">
+                        <label for="tx-transfer-to-account">Akun Tujuan</label>
+                        <select id="tx-transfer-to-account">
+                            <option value="">-- Pilih Akun Tujuan --</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="tx-date">Tanggal</label>
+                        <input type="date" id="tx-date">
+                    </div>
+                    <div id="tx-form-actions" style="display:flex;gap:8px;">
+                        <button type="submit" class="btn-primary" id="tx-submit-btn" style="flex:1;">Simpan Perubahan</button>
+                        <button type="button" class="btn-secondary" id="tx-cancel-btn">Batal</button>
+                    </div>
+                </form>
+            </div>
+        </div>
     </div>
 
     <!-- Firebase SDKs -->
