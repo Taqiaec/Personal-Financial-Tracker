@@ -595,6 +595,10 @@ main.container { padding: 32px 24px 80px; }
 .type-tab[data-type="income"].active { color: var(--income); }
 .type-tab[data-type="expense"].active { color: var(--expense); }
 .type-tab[data-type="transfer"].active { color: #6366f1; }
+.type-tab[data-type="debt"].active { color: #f59e0b; }
+#debt-type-tabs .type-tab[data-debt-type="hutang"].active { color: var(--expense); }
+#debt-type-tabs .type-tab[data-debt-type="piutang"].active { color: var(--income); }
+#debt-type-tabs { margin-bottom: 0; }
 
 /* === ADMIN FEE ROW === */
 .admin-fee-row {

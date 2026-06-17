@@ -385,6 +385,44 @@
                             <button type="button" class="type-tab active" data-type="expense">Pengeluaran</button>
                             <button type="button" class="type-tab" data-type="income">Pemasukan</button>
                             <button type="button" class="type-tab" data-type="transfer">Transfer</button>
+                            <button type="button" class="type-tab" data-type="debt">Hutang/Piutang</button>
+                        </div>
+
+                        <!-- Debt Form Section (hidden by default) -->
+                        <div id="debt-form-section" style="display:none;">
+                            <div class="form-group">
+                                <label>Tipe</label>
+                                <div class="type-tabs" id="debt-type-tabs" style="margin-top:0;">
+                                    <button type="button" class="type-tab active" data-debt-type="hutang">Hutang</button>
+                                    <button type="button" class="type-tab" data-debt-type="piutang">Piutang</button>
+                                </div>
+                                <input type="hidden" id="add-debt-type" value="hutang">
+                            </div>
+                            <div class="form-group">
+                                <label for="add-debt-person">Nama Orang</label>
+                                <input type="text" id="add-debt-person" required placeholder="Nama orang (bebas)">
+                            </div>
+                            <div class="form-group">
+                                <label for="add-debt-amount">Jumlah (Rp)</label>
+                                <input type="number" id="add-debt-amount" required min="1" placeholder="1000000">
+                            </div>
+                            <div class="form-group">
+                                <label for="add-debt-desc">Deskripsi (opsional)</label>
+                                <input type="text" id="add-debt-desc" placeholder="Contoh: Pinjam buat bayar SPP">
+                            </div>
+                            <div class="form-group">
+                                <label for="add-debt-date">Tanggal</label>
+                                <input type="date" id="add-debt-date">
+                            </div>
+                            <div class="form-group">
+                                <label for="add-debt-account">Akun Terkait (opsional)</label>
+                                <select id="add-debt-account">
+                                    <option value="">-- Pilih Akun --</option>
+                                </select>
+                            </div>
+                            <div id="debt-form-actions" style="display:flex;gap:8px;">
+                                <button type="button" class="btn-primary" id="add-debt-submit" style="flex:1;">Simpan Hutang/Piutang</button>
+                            </div>
                         </div>
 
                         <!-- Category (hidden for transfer) -->

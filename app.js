@@ -422,12 +422,34 @@ typeTabs.addEventListener('click', function (e) {
 
 function updateFormForType() {
     var isTransfer = currentType === 'transfer';
-    document.getElementById('category-group').style.display = isTransfer ? 'none' : '';
+    var isDebt = currentType === 'debt';
+    // Show/hide transaction form fields
+    var txFields = ['scanner-section', 'category-group', 'source-account-group', 'transfer-to-group', 'admin-fee-row', 'split-bill-section'];
+    txFields.forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = isDebt ? 'none' : '';
+    });
+    // Show/hide desc, amount, date (transaction form fields)
+    var descGroup = document.getElementById('desc').closest('.form-group');
+    var amountGroup = document.getElementById('amount').closest('.form-group');
+    var dateGroup = document.getElementById('date').closest('.form-group');
+    var editIdEl = document.getElementById('edit-tx-id');
+    var formActions = document.getElementById('form-actions');
+    if (descGroup) descGroup.style.display = isDebt ? 'none' : '';
+    if (amountGroup) amountGroup.style.display = isDebt ? 'none' : '';
+    if (dateGroup) dateGroup.style.display = isDebt ? 'none' : '';
+    if (editIdEl) editIdEl.style.display = isDebt ? 'none' : '';
+    if (formActions) formActions.style.display = isDebt ? 'none' : '';
+    // Show/hide debt form section
+    var debtSection = document.getElementById('debt-form-section');
+    if (debtSection) debtSection.style.display = isDebt ? '' : 'none';
+    // Update h2
+    var h2 = document.querySelector('#page-add .form-card h2');
+    if (h2) h2.textContent = isDebt ? 'Tambah Hutang/Piutang' : (editIdEl && editIdEl.value ? 'Edit Transaksi' : 'Tambah Transaksi');
+
     document.getElementById('source-account-label').textContent = isTransfer ? 'Akun Asal' : 'Akun';
-    document.getElementById('transfer-to-group').style.display = isTransfer ? '' : 'none';
     var isEdit = !!document.getElementById('edit-tx-id').value;
     document.getElementById('admin-fee-row').style.display = (isTransfer && !isEdit) ? '' : 'none';
-    document.getElementById('scanner-section').style.display = isTransfer ? 'none' : '';
     // Split bill section — expense only, not edit mode
     var isEdit2 = !!document.getElementById('edit-tx-id').value;
     var splitSection = document.getElementById('split-bill-section');
@@ -437,9 +459,10 @@ function updateFormForType() {
             resetSplitBillForm();
         }
     }
-    if (!isTransfer) updateCategoryOptions();
+    if (!isTransfer && !isDebt) updateCategoryOptions();
     populateAccountSelect();
     if (isTransfer) populateTransferToAccountSelect();
+    if (isDebt) populateDebtAccountDropdown();
 }
 
 function updateCategoryOptions() {
@@ -484,6 +507,75 @@ function populateTransferToAccountSelect() {
     });
     select.value = curVal;
 }
+
+// === DEBT FORM (Add Page) ===
+function populateDebtAccountDropdown() {
+    var select = document.getElementById('add-debt-account');
+    if (!select) return;
+    select.innerHTML = '<option value="">-- Pilih Akun --</option>';
+    accCache.forEach(function (a) {
+        var opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = a.bankName + ' (' + getAccountTypeLabel(a.accountType) + ')';
+        select.appendChild(opt);
+    });
+}
+
+// Debt type tabs (hutang/piutang)
+document.getElementById('debt-type-tabs').addEventListener('click', function (e) {
+    var tab = e.target.closest('.type-tab');
+    if (!tab) return;
+    document.querySelectorAll('#debt-type-tabs .type-tab').forEach(function (t) { t.classList.remove('active'); });
+    tab.classList.add('active');
+    document.getElementById('add-debt-type').value = tab.dataset.debtType;
+});
+
+// Debt form submit
+document.getElementById('add-debt-submit').addEventListener('click', function () {
+    if (!uid) return;
+    var debtType = document.getElementById('add-debt-type').value;
+    var person = document.getElementById('add-debt-person').value.trim();
+    var amount = parseInt(document.getElementById('add-debt-amount').value) || 0;
+    var desc = document.getElementById('add-debt-desc').value.trim();
+    var date = document.getElementById('add-debt-date').value;
+    var accountId = document.getElementById('add-debt-account').value;
+
+    if (!person || amount <= 0 || !date) {
+        showToast('Mohon isi nama, jumlah, dan tanggal');
+        return;
+    }
+
+    db.collection('users').doc(uid).collection('debts').add({
+        person: person,
+        type: debtType,
+        amount: amount,
+        description: desc,
+        date: date,
+        accountId: accountId,
+        remainingAmount: amount,
+        status: 'pending',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        settledAt: null
+    }).then(function () {
+        showToast('Hutang/Piutang berhasil ditambahkan');
+        // Reset debt form
+        document.getElementById('add-debt-person').value = '';
+        document.getElementById('add-debt-amount').value = '';
+        document.getElementById('add-debt-desc').value = '';
+        document.getElementById('add-debt-date').value = new Date().toISOString().slice(0, 10);
+        document.getElementById('add-debt-account').value = '';
+        // Switch back to expense tab
+        currentType = 'expense';
+        document.querySelectorAll('#type-tabs .type-tab').forEach(function (t) { t.classList.remove('active'); });
+        document.querySelector('#type-tabs .type-tab[data-type="expense"]').classList.add('active');
+        updateFormForType();
+    }).catch(function (err) {
+        showToast('Gagal menambahkan: ' + err.message);
+    });
+});
+
+// Set default date for debt form
+document.getElementById('add-debt-date').value = new Date().toISOString().slice(0, 10);
 
 populateAccountSelect();
 document.getElementById('date').value = new Date().toISOString().slice(0, 10);
@@ -1220,6 +1312,22 @@ function resetTransactionForm() {
     document.getElementById('date').value = new Date().toISOString().slice(0, 10);
     document.getElementById('tx-admin-fee').value = '0';
     resetSplitBillForm();
+    // Reset debt form fields
+    var debtPerson = document.getElementById('add-debt-person');
+    if (debtPerson) debtPerson.value = '';
+    var debtAmount = document.getElementById('add-debt-amount');
+    if (debtAmount) debtAmount.value = '';
+    var debtDesc = document.getElementById('add-debt-desc');
+    if (debtDesc) debtDesc.value = '';
+    var debtDate = document.getElementById('add-debt-date');
+    if (debtDate) debtDate.value = new Date().toISOString().slice(0, 10);
+    var debtAccount = document.getElementById('add-debt-account');
+    if (debtAccount) debtAccount.value = '';
+    var debtType = document.getElementById('add-debt-type');
+    if (debtType) debtType.value = 'hutang';
+    document.querySelectorAll('#debt-type-tabs .type-tab').forEach(function (t) { t.classList.remove('active'); });
+    var hutangTab = document.querySelector('#debt-type-tabs .type-tab[data-debt-type="hutang"]');
+    if (hutangTab) hutangTab.classList.add('active');
     // Reset type tabs to expense
     currentType = 'expense';
     typeTabs.querySelectorAll('.type-tab').forEach(function (t) { t.classList.remove('active'); });
