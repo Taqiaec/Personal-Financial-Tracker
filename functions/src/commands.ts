@@ -9,6 +9,19 @@ const CATEGORIES = {
 
 function db() { return admin.firestore(); }
 
+async function loadDebtPayments(uid: string, debtIds: string[]): Promise<Record<string, Array<{ amount: number; accountId: string }>>> {
+  const result: Record<string, Array<{ amount: number; accountId: string }>> = {};
+  if (debtIds.length === 0) return result;
+  await Promise.all(debtIds.map(async (debtId) => {
+    const snap = await db().collection('users').doc(uid).collection('debts').doc(debtId).collection('payments').get();
+    result[debtId] = snap.docs.map(d => {
+      const p = d.data();
+      return { amount: p.amount, accountId: p.accountId || '' };
+    });
+  }));
+  return result;
+}
+
 function formatCurrency(n: number): string {
   return new Intl.NumberFormat('id-ID').format(n);
 }
@@ -249,7 +262,6 @@ async function normalizeAndCreateDebt(
     accountId: accountId,
     remainingAmount: amount,
     status: 'pending',
-    payments: [],
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     settledAt: null
   });
@@ -384,7 +396,6 @@ async function normalizeAndCreateSplitBill(
         accountId: '',
         remainingAmount: Math.round(Number(p.amount)) || 0,
         status: 'pending',
-        payments: [],
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         settledAt: null
       });
@@ -671,11 +682,13 @@ export async function handleSaldo(chatId: number): Promise<void> {
     txns.push({ accountId: t.accountId, transferToAccountId: t.transferToAccountId, type: t.type, amount: t.amount });
   });
 
-  const debts: Array<{ type: string; amount: number; remainingAmount: number; accountId: string; payments: Array<{ amount: number; accountId: string }> }> = [];
+  const debts: Array<{ id: string; type: string; amount: number; remainingAmount: number; accountId: string }> = [];
   debtSnap.forEach(d => {
     const v = d.data();
-    debts.push({ type: v.type, amount: v.amount, remainingAmount: v.remainingAmount != null ? v.remainingAmount : v.amount, accountId: v.accountId || '', payments: v.payments || [] });
+    debts.push({ id: d.id, type: v.type, amount: v.amount, remainingAmount: v.remainingAmount != null ? v.remainingAmount : v.amount, accountId: v.accountId || '' });
   });
+
+  const debtPaymentsMap = await loadDebtPayments(uid, debts.map(d => d.id));
 
   let totalBalance = 0;
   const lines: string[] = [];
@@ -728,7 +741,7 @@ export async function handleSaldo(chatId: number): Promise<void> {
         if (d.type === 'piutang' && d.accountId === a.id) {
           balance -= d.amount;
         }
-        (d.payments || []).forEach(p => {
+        (debtPaymentsMap[d.id] || []).forEach(p => {
           if (p.accountId === a.id) {
             balance += (d.type === 'piutang' ? p.amount : -p.amount);
           }
@@ -1028,11 +1041,13 @@ export async function handleAkun(chatId: number): Promise<void> {
     txns.push({ accountId: t.accountId, transferToAccountId: t.transferToAccountId, type: t.type, amount: t.amount });
   });
 
-  const debts: Array<{ type: string; amount: number; accountId: string; payments: Array<{ amount: number; accountId: string }> }> = [];
+  const debts: Array<{ id: string; type: string; amount: number; accountId: string }> = [];
   debtSnap.forEach(d => {
     const v = d.data();
-    debts.push({ type: v.type, amount: v.amount, accountId: v.accountId || '', payments: v.payments || [] });
+    debts.push({ id: d.id, type: v.type, amount: v.amount, accountId: v.accountId || '' });
   });
+
+  const debtPaymentsMap = await loadDebtPayments(uid, debts.map(d => d.id));
 
   const typeLabels: Record<string, string> = { passive: '💳 Pasif', investment: '📈 Investasi' };
   const lines: string[] = [];
@@ -1061,7 +1076,7 @@ export async function handleAkun(chatId: number): Promise<void> {
         if (dd.type === 'piutang' && dd.accountId === d.id) {
           balance -= dd.amount;
         }
-        (dd.payments || []).forEach(p => {
+        (debtPaymentsMap[dd.id] || []).forEach(p => {
           if (p.accountId === d.id) {
             balance += (dd.type === 'piutang' ? p.amount : -p.amount);
           }
@@ -1324,7 +1339,7 @@ export async function handleHutang(chatId: number): Promise<void> {
     const remaining = v.remainingAmount != null ? v.remainingAmount : v.amount;
     total += remaining;
     const icon = v.status === 'partial' ? '🔄' : '⏳';
-    const paidInfo = (v.payments && v.payments.length > 0)
+    const paidInfo = (v.amount - remaining > 0)
       ? ` (dibayar: Rp ${formatCurrency(v.amount - remaining)})`
       : '';
     lines.push(`${icon} <b>${escapeHtml(v.person)}</b>: Rp ${formatCurrency(v.amount)} | Sisa: <b>Rp ${formatCurrency(remaining)}</b>${paidInfo}\n  ${escapeHtml(v.description || '')} · ${v.date}`);
@@ -1358,7 +1373,7 @@ export async function handlePiutang(chatId: number): Promise<void> {
     const remaining = v.remainingAmount != null ? v.remainingAmount : v.amount;
     total += remaining;
     const icon = v.status === 'partial' ? '🔄' : '⏳';
-    const paidInfo = (v.payments && v.payments.length > 0)
+    const paidInfo = (v.amount - remaining > 0)
       ? ` (sudah bayar: Rp ${formatCurrency(v.amount - remaining)})`
       : '';
     lines.push(`${icon} <b>${escapeHtml(v.person)}</b>: Rp ${formatCurrency(v.amount)} | Sisa: <b>Rp ${formatCurrency(remaining)}</b>${paidInfo}\n  ${escapeHtml(v.description || '')} · ${v.date}`);
@@ -1450,15 +1465,10 @@ export async function handleBayar(chatId: number, text: string): Promise<void> {
     note = note.replace(new RegExp('\\b' + accountName.toLowerCase() + '\\b', 'i'), '').trim();
   }
 
-  // Append payment
-  const payments = (debt.payments || []).slice();
-  payments.push({
-    amount: amount,
-    date: date,
-    accountId: accountId,
-    note: note,
-    createdAt: admin.firestore.FieldValue.serverTimestamp()
-  });
+  // Load existing payments from subcollection
+  const existingPayments = await loadDebtPayments(uid, [match.id]);
+  const payments = existingPayments[match.id] || [];
+  payments.push({ amount, accountId });
 
   const totalPaid = payments.reduce((s: number, p: any) => s + p.amount, 0);
   const remaining = Math.max(0, debt.amount - totalPaid);
@@ -1467,8 +1477,18 @@ export async function handleBayar(chatId: number, text: string): Promise<void> {
   else if (payments.length > 0) status = 'partial';
   else status = 'pending';
 
+  // Write payment to subcollection
+  const debtRef = db().collection('users').doc(uid).collection('debts').doc(match.id);
+  await debtRef.collection('payments').add({
+    amount: amount,
+    date: date,
+    accountId: accountId,
+    note: note,
+    createdAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  // Update debt's remainingAmount and status
   const updateData: any = {
-    payments: payments,
     remainingAmount: remaining,
     status: status
   };
@@ -1476,7 +1496,7 @@ export async function handleBayar(chatId: number, text: string): Promise<void> {
     updateData.settledAt = admin.firestore.FieldValue.serverTimestamp();
   }
 
-  await db().collection('users').doc(uid).collection('debts').doc(match.id).update(updateData);
+  await debtRef.update(updateData);
 
   const typeLabel = debt.type === 'hutang' ? 'Hutang' : 'Piutang';
   const remainingLine = remaining > 0 ? `\nSisa: Rp ${formatCurrency(remaining)}` : '';

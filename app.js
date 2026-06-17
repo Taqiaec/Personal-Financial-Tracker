@@ -23,6 +23,7 @@ var budgetCache = {};
 var subTypeCache = null;
 var paydayOverridesCache = {};
 var debtCache = [];
+var debtPaymentsCache = {}; // { debtId: [payment, ...] }
 var uid = null;
 
 // Listener unsubscribe functions
@@ -135,12 +136,27 @@ function initDataListeners(userUid) {
                     accountId: data.accountId || '',
                     remainingAmount: data.remainingAmount != null ? data.remainingAmount : data.amount,
                     status: data.status || 'pending',
-                    payments: data.payments || [],
                     createdAt: data.createdAt,
                     settledAt: data.settledAt || null
                 };
             });
-            renderActivePage();
+            // Fetch payments subcollection for each debt
+            var debtIds = debtCache.map(function (d) { return d.id; });
+            debtPaymentsCache = {};
+            if (debtIds.length > 0) {
+                Promise.all(debtIds.map(function (debtId) {
+                    return userRef.collection('debts').doc(debtId).collection('payments')
+                        .orderBy('createdAt', 'asc').get()
+                        .then(function (paySnap) {
+                            debtPaymentsCache[debtId] = paySnap.docs.map(function (pd) {
+                                var p = pd.data();
+                                return { id: pd.id, amount: p.amount, date: p.date, accountId: p.accountId || '', note: p.note || '', createdAt: p.createdAt };
+                            });
+                        });
+                })).then(function () { renderActivePage(); });
+            } else {
+                renderActivePage();
+            }
         }, function (err) {
             showToast('Gagal memuat data hutang/piutang: ' + err.message);
             console.error(err);
@@ -165,6 +181,7 @@ function cleanupDataListeners() {
     budgetCache = {};
     paydayOverridesCache = {};
     debtCache = [];
+    debtPaymentsCache = {};
     uid = null;
 }
 
@@ -213,6 +230,12 @@ function getAccountBalance(accountId) {
             if (d.type === 'piutang' && d.accountId === accountId) {
                 txBalance -= (d.remainingAmount || 0);
             }
+            var dpmts = debtPaymentsCache[d.id] || [];
+            dpmts.forEach(function (p) {
+                if (p.accountId === accountId) {
+                    txBalance += (d.type === 'piutang' ? p.amount : -p.amount);
+                }
+            });
         });
     }
 
@@ -619,7 +642,6 @@ document.getElementById('transaction-form').addEventListener('submit', function 
                     accountId: '',
                     remainingAmount: d.amount,
                     status: 'pending',
-                    payments: [],
                     createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                     settledAt: null
                 });
@@ -1896,8 +1918,9 @@ function renderDebtItems(debts) {
         var account = d.accountId ? getAccountById(d.accountId) : null;
         var accountBadge = account ? ' <span class="tx-account-name">' + escapeHtml(account.bankName) + '</span>' : '';
         var paymentsHtml = '';
-        if (d.payments && d.payments.length > 0) {
-            paymentsHtml = '<div class="debt-payments">' + d.payments.map(function (p, idx) {
+        var debtPayments = debtPaymentsCache[d.id] || [];
+        if (debtPayments.length > 0) {
+            paymentsHtml = '<div class="debt-payments">' + debtPayments.map(function (p, idx) {
                 var pAccount = p.accountId ? getAccountById(p.accountId) : null;
                 var pAccName = pAccount ? escapeHtml(pAccount.bankName) : 'Tanpa Akun';
                 return '<div class="debt-payment-item">' +
@@ -2313,14 +2336,14 @@ document.getElementById('debt-form').addEventListener('submit', function (e) {
         // Update existing debt
         var existing = debtCache.find(function (d) { return d.id === debtId; });
         if (existing) {
-            var totalPaid = (existing.payments || []).reduce(function (s, p) { return s + p.amount; }, 0);
+            var existingPayments = debtPaymentsCache[debtId] || [];
+            var totalPaid = existingPayments.reduce(function (s, p) { return s + p.amount; }, 0);
             var newRemaining = Math.max(0, amount - totalPaid);
             var newStatus = 'pending';
             if (newRemaining <= 0) newStatus = 'paid';
             else if (totalPaid > 0 && newRemaining < amount) newStatus = 'partial';
             debtData.remainingAmount = newRemaining;
             debtData.status = newStatus;
-            debtData.payments = existing.payments || [];
             if (newStatus === 'paid') debtData.settledAt = firebase.firestore.FieldValue.serverTimestamp();
             if (newStatus !== 'paid' && existing.status === 'paid') debtData.settledAt = null;
         }
@@ -2337,7 +2360,6 @@ document.getElementById('debt-form').addEventListener('submit', function (e) {
         // Create new
         debtData.remainingAmount = amount;
         debtData.status = 'pending';
-        debtData.payments = [];
         debtData.settledAt = null;
         debtData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
         db.collection('users').doc(uid).collection('debts').add(debtData)
@@ -2412,7 +2434,7 @@ document.getElementById('payment-form').addEventListener('submit', function (e) 
         if (!confirm('Pembayaran Rp ' + formatCurrency(payAmount) + ' melebihi sisa Rp ' + formatCurrency(remaining) + '. Lanjutkan?')) return;
     }
 
-    var payments = (debt.payments || []).slice();
+    var payments = (debtPaymentsCache[debtId] || []).slice();
     payments.push({
         amount: payAmount,
         date: payDate,
@@ -2427,39 +2449,45 @@ document.getElementById('payment-form').addEventListener('submit', function (e) 
     if (newRemaining <= 0) newStatus = 'paid';
     else if (payments.length > 0) newStatus = 'partial';
 
-    var updateData = {
-        payments: payments,
-        remainingAmount: newRemaining,
-        status: newStatus
-    };
-    if (newStatus === 'paid') {
-        updateData.settledAt = firebase.firestore.FieldValue.serverTimestamp();
-    }
-
-    db.collection('users').doc(uid).collection('debts').doc(debtId).update(updateData)
-        .then(function () {
-            // Create transaction for payment (ledger)
-            var txType = debt.type === 'piutang' ? 'income' : 'expense';
-            var txCategory = debt.type === 'piutang' ? '💰 Piutang' : 'Hutang';
-            var txPrefix = debt.type === 'piutang' ? 'Bayar: ' : 'Bayar Hutang: ';
-            var txDesc = txPrefix + debt.person + (payNote ? ' - ' + payNote : '');
-            return db.collection('users').doc(uid).collection('transactions').add({
-                desc: txDesc,
-                amount: payAmount,
-                type: txType,
-                category: txCategory,
-                date: payDate,
-                accountId: payAccountId,
-                createdAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
-        })
-        .then(function () {
-            showToast('Pembayaran berhasil dicatat');
-            paymentModal.classList.remove('show');
-        })
-        .catch(function (err) {
-            showToast('Gagal mencatat pembayaran: ' + err.message);
+    // Write payment to subcollection
+    var debtRef = db.collection('users').doc(uid).collection('debts').doc(debtId);
+    debtRef.collection('payments').add({
+        amount: payAmount,
+        date: payDate,
+        accountId: payAccountId,
+        note: payNote,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    }).then(function () {
+        // Update debt's remainingAmount and status
+        var updateData = {
+            remainingAmount: newRemaining,
+            status: newStatus
+        };
+        if (newStatus === 'paid') {
+            updateData.settledAt = firebase.firestore.FieldValue.serverTimestamp();
+        }
+        return debtRef.update(updateData);
+    }).then(function () {
+        // Create transaction for payment (ledger)
+        var txType = debt.type === 'piutang' ? 'income' : 'expense';
+        var txCategory = debt.type === 'piutang' ? '💰 Piutang' : 'Hutang';
+        var txPrefix = debt.type === 'piutang' ? 'Bayar: ' : 'Bayar Hutang: ';
+        var txDesc = txPrefix + debt.person + (payNote ? ' - ' + payNote : '');
+        return db.collection('users').doc(uid).collection('transactions').add({
+            desc: txDesc,
+            amount: payAmount,
+            type: txType,
+            category: txCategory,
+            date: payDate,
+            accountId: payAccountId,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
+    }).then(function () {
+        showToast('Pembayaran berhasil dicatat');
+        paymentModal.classList.remove('show');
+    }).catch(function (err) {
+        showToast('Gagal mencatat pembayaran: ' + err.message);
+    });
 });
 
 // --- Debt filter listeners ---
@@ -2485,8 +2513,14 @@ document.addEventListener('click', function (e) {
         if (!d) return;
         if (!confirm('Hapus hutang/piutang "' + d.person + '" (Rp ' + formatCurrency(d.amount) + ')? Semua pembayaran terkait juga akan dihapus.')) return;
         if (!uid) return;
-        db.collection('users').doc(uid).collection('debts').doc(deleteId).delete()
-            .then(function () { showToast('Berhasil dihapus'); })
+        var debtRef = db.collection('users').doc(uid).collection('debts').doc(deleteId);
+        // Delete payments subcollection first
+        debtRef.collection('payments').get().then(function (paySnap) {
+            var batch = db.batch();
+            paySnap.docs.forEach(function (pd) { batch.delete(pd.ref); });
+            batch.delete(debtRef);
+            return batch.commit();
+        }).then(function () { showToast('Berhasil dihapus'); })
             .catch(function (err) { showToast('Gagal menghapus: ' + err.message); });
         return;
     }
@@ -2505,26 +2539,29 @@ document.addEventListener('click', function (e) {
         var debtId = delPayBtn.dataset.debtId;
         var payIdx = parseInt(delPayBtn.dataset.paymentIdx);
         var debt = debtCache.find(function (x) { return x.id === debtId; });
-        if (!debt || payIdx < 0 || payIdx >= (debt.payments || []).length) return;
-        if (!confirm('Hapus pembayaran Rp ' + formatCurrency(debt.payments[payIdx].amount) + '?')) return;
+        var debtPayments = debtPaymentsCache[debtId] || [];
+        if (!debt || payIdx < 0 || payIdx >= debtPayments.length) return;
+        if (!confirm('Hapus pembayaran Rp ' + formatCurrency(debtPayments[payIdx].amount) + '?')) return;
         if (!uid) return;
 
-        var payments = debt.payments.slice();
-        payments.splice(payIdx, 1);
-        var totalPaid = payments.reduce(function (s, p) { return s + p.amount; }, 0);
+        var payToDelete = debtPayments[payIdx];
+        var remainingPayments = debtPayments.filter(function (_, i) { return i !== payIdx; });
+        var totalPaid = remainingPayments.reduce(function (s, p) { return s + p.amount; }, 0);
         var newRemaining = Math.max(0, debt.amount - totalPaid);
         var newStatus = 'pending';
         if (newRemaining <= 0) newStatus = 'paid';
-        else if (payments.length > 0) newStatus = 'partial';
+        else if (remainingPayments.length > 0) newStatus = 'partial';
 
-        var updateData = {
-            payments: payments,
-            remainingAmount: newRemaining,
-            status: newStatus
-        };
-        if (newStatus !== 'paid') updateData.settledAt = null;
-
-        db.collection('users').doc(uid).collection('debts').doc(debtId).update(updateData)
+        var debtRef = db.collection('users').doc(uid).collection('debts').doc(debtId);
+        debtRef.collection('payments').doc(payToDelete.id).delete()
+            .then(function () {
+                var updateData = {
+                    remainingAmount: newRemaining,
+                    status: newStatus
+                };
+                if (newStatus !== 'paid') updateData.settledAt = null;
+                return debtRef.update(updateData);
+            })
             .then(function () { showToast('Pembayaran dihapus'); })
             .catch(function (err) { showToast('Gagal menghapus pembayaran: ' + err.message); });
         return;
