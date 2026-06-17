@@ -15,6 +15,10 @@ const CHART_COLORS = [
     '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#6366f1'
 ];
 
+function isExcludedFromCharts(t) {
+    return t.type === 'expense' && t.category === 'Hutang';
+}
+
 // === DATA CACHE (populated by Firestore listeners) ===
 var txCache = [];
 var accCache = [];
@@ -539,9 +543,10 @@ document.getElementById('add-debt-submit').addEventListener('click', function ()
     var desc = document.getElementById('add-debt-desc').value.trim();
     var date = document.getElementById('add-debt-date').value;
     var accountId = document.getElementById('add-debt-account').value;
+    var category = document.getElementById('add-debt-category').value;
 
-    if (!person || amount <= 0 || !date) {
-        showToast('Mohon isi nama, jumlah, dan tanggal');
+    if (!person || amount <= 0 || !date || !category) {
+        showToast('Mohon isi nama, jumlah, tanggal, dan kategori');
         return;
     }
 
@@ -552,6 +557,7 @@ document.getElementById('add-debt-submit').addEventListener('click', function ()
         description: desc,
         date: date,
         accountId: accountId,
+        category: category,
         remainingAmount: amount,
         status: 'pending',
         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -564,6 +570,7 @@ document.getElementById('add-debt-submit').addEventListener('click', function ()
         document.getElementById('add-debt-desc').value = '';
         document.getElementById('add-debt-date').value = new Date().toISOString().slice(0, 10);
         document.getElementById('add-debt-account').value = '';
+        document.getElementById('add-debt-category').value = '';
         // Switch back to expense tab
         currentType = 'expense';
         document.querySelectorAll('#type-tabs .type-tab').forEach(function (t) { t.classList.remove('active'); });
@@ -836,7 +843,7 @@ function renderDashboard() {
 
     var piutangTotal = txns.filter(function (t) { return t.type === 'income' && t.category === '💰 Piutang'; }).reduce(function (s, t) { return s + t.amount; }, 0);
     var incomeTotal = txns.filter(function (t) { return t.type === 'income' && t.category !== '💰 Piutang'; }).reduce(function (s, t) { return s + t.amount; }, 0);
-    var expenseTotal = Math.max(0, txns.filter(function (t) { return t.type === 'expense'; }).reduce(function (s, t) { return s + t.amount; }, 0) - piutangTotal);
+    var expenseTotal = Math.max(0, txns.filter(function (t) { return t.type === 'expense' && !isExcludedFromCharts(t); }).reduce(function (s, t) { return s + t.amount; }, 0) - piutangTotal);
     var accountTotal = accCache.reduce(function (s, a) { return s + getAccountDisplayBalance(a); }, 0);
     var unassignedNet = txns.filter(function (t) { return !t.accountId && t.type !== 'transfer'; }).reduce(function (s, t) { return s + (t.type === 'income' ? t.amount : -t.amount); }, 0);
     var balance = accountTotal + unassignedNet;
@@ -903,7 +910,7 @@ function renderPieChart(txns, monthKey) {
     var empty = document.getElementById('pie-empty');
     var parent = canvas.parentElement;
 
-    var expenses = txns.filter(function (t) { return t.type === 'expense'; });
+    var expenses = txns.filter(function (t) { return t.type === 'expense' && !isExcludedFromCharts(t); });
     if (monthKey) {
         expenses = expenses.filter(function (t) { return getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === monthKey; });
     }
@@ -1046,7 +1053,7 @@ function renderBarChart(txns) {
         var key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
         var inc = txns.filter(function (t) { return t.type === 'income' && t.category !== '💰 Piutang' && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === key; }).reduce(function (s, t) { return s + t.amount; }, 0);
         var piutangInMonth = txns.filter(function (t) { return t.type === 'income' && t.category === '💰 Piutang' && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === key; }).reduce(function (s, t) { return s + t.amount; }, 0);
-        var exp = Math.max(0, txns.filter(function (t) { return t.type === 'expense' && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === key; }).reduce(function (s, t) { return s + t.amount; }, 0) - piutangInMonth);
+        var exp = Math.max(0, txns.filter(function (t) { return t.type === 'expense' && !isExcludedFromCharts(t) && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === key; }).reduce(function (s, t) { return s + t.amount; }, 0) - piutangInMonth);
         months.push({ label: d.toLocaleDateString('id-ID', { month: 'short' }), inc: inc, exp: exp });
     }
 
@@ -1600,7 +1607,7 @@ function renderBudgetProgress() {
     var currentMonth = getMonthKey(today, getPaydayStart(today.slice(0, 7)));
 
     var monthTxns = txCache.filter(function (t) {
-        return t.type === 'expense' && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === currentMonth;
+        return t.type === 'expense' && !isExcludedFromCharts(t) && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === currentMonth;
     });
 
     var catMap = {};
@@ -1667,7 +1674,7 @@ function renderBudgetAlerts() {
     var currentMonth = getMonthKey(today, getPaydayStart(today.slice(0, 7)));
 
     var monthTxns = txCache.filter(function (t) {
-        return t.type === 'expense' && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === currentMonth;
+        return t.type === 'expense' && !isExcludedFromCharts(t) && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === currentMonth;
     });
 
     var catMap = {};
@@ -1863,7 +1870,7 @@ function renderAccountsPage() {
     var unassignedTxns = txCache.filter(function (t) { return !t.accountId; });
     var unassignedIncome = unassignedTxns.filter(function (t) { return t.type === 'income' && t.category !== '💰 Piutang'; }).reduce(function (s, t) { return s + t.amount; }, 0);
     var unassignedPiutang = unassignedTxns.filter(function (t) { return t.type === 'income' && t.category === '💰 Piutang'; }).reduce(function (s, t) { return s + t.amount; }, 0);
-    var unassignedExpense = unassignedTxns.filter(function (t) { return t.type === 'expense'; }).reduce(function (s, t) { return s + t.amount; }, 0);
+    var unassignedExpense = unassignedTxns.filter(function (t) { return t.type === 'expense' && !isExcludedFromCharts(t); }).reduce(function (s, t) { return s + t.amount; }, 0);
     var unassignedBalance = unassignedIncome + unassignedPiutang - unassignedExpense;
 
     if (!accounts.length && !unassignedTxns.length) {
@@ -2424,9 +2431,10 @@ document.getElementById('debt-form').addEventListener('submit', function (e) {
     var desc = document.getElementById('debt-desc').value.trim();
     var date = document.getElementById('debt-date').value;
     var accountId = document.getElementById('debt-account').value;
+    var category = document.getElementById('debt-category').value;
 
-    if (!person || amount <= 0 || !date) {
-        showToast('Mohon isi nama, jumlah, dan tanggal');
+    if (!person || amount <= 0 || !date || !category) {
+        showToast('Mohon isi nama, jumlah, tanggal, dan kategori');
         return;
     }
 
@@ -2436,7 +2444,8 @@ document.getElementById('debt-form').addEventListener('submit', function (e) {
         amount: amount,
         description: desc,
         date: date,
-        accountId: accountId
+        accountId: accountId,
+        category: category
     };
 
     var debtId = document.getElementById('debt-id').value;
@@ -2578,7 +2587,14 @@ document.getElementById('payment-form').addEventListener('submit', function (e) 
     }).then(function () {
         // Create transaction for payment (ledger)
         var txType = debt.type === 'piutang' ? 'income' : 'expense';
-        var txCategory = debt.type === 'piutang' ? '💰 Piutang' : 'Hutang';
+        var txCategory;
+        if (debt.type === 'piutang') {
+            txCategory = '💰 Piutang';
+        } else {
+            txCategory = (debt.category && CATEGORIES.expense.indexOf(debt.category) !== -1)
+                ? debt.category
+                : 'Hutang';
+        }
         var txPrefix = debt.type === 'piutang' ? 'Bayar: ' : 'Bayar Hutang: ';
         var txDesc = txPrefix + debt.person + (payNote ? ' - ' + payNote : '');
         return db.collection('users').doc(uid).collection('transactions').add({

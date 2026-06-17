@@ -253,6 +253,11 @@ async function normalizeAndCreateDebt(
     }
   }
 
+  // Category: use parsed category if valid, fallback to 'Lainnya'
+  const category = parsed.category && CATEGORIES.expense.includes(parsed.category)
+    ? parsed.category
+    : 'Lainnya';
+
   await db().collection('users').doc(uid).collection('debts').add({
     person: person,
     type: debtType,
@@ -260,6 +265,7 @@ async function normalizeAndCreateDebt(
     description: desc,
     date: date,
     accountId: accountId,
+    category: category,
     remainingAmount: amount,
     status: 'pending',
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1497,6 +1503,22 @@ export async function handleBayar(chatId: number, text: string): Promise<void> {
   }
 
   await debtRef.update(updateData);
+
+  // Create transaction for hutang payment (ledger)
+  if (debt.type === 'hutang') {
+    const txCategory = debt.category && CATEGORIES.expense.includes(debt.category)
+      ? debt.category
+      : 'Hutang';
+    await db().collection('users').doc(uid).collection('transactions').add({
+      desc: 'Bayar Hutang: ' + debt.person + (note ? ' - ' + note : ''),
+      amount: amount,
+      type: 'expense',
+      category: txCategory,
+      date: date,
+      accountId: accountId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  }
 
   const typeLabel = debt.type === 'hutang' ? 'Hutang' : 'Piutang';
   const remainingLine = remaining > 0 ? `\nSisa: Rp ${formatCurrency(remaining)}` : '';

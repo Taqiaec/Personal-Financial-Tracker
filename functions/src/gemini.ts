@@ -166,6 +166,7 @@ export function buildNaturalLanguagePrompt(
     '   - Jika terdeteksi hutang/piutang:\n' +
     '     debtType = "hutang" atau "piutang"\n' +
     '     debtPerson = nama orang yang terlibat (tanpa gelar/sebutan, satu kata)\n' +
+    '     category = kategori pengeluaran sesungguhnya (misal: "Makanan", "Transportasi", "Belanja")\n' +
     '     type = "expense" (karena duit tetap keluar dari akun)\n' +
     '   - Jika TIDAK terdeteksi hutang/piutang → debtType = "", debtPerson = ""\n\n' +
     '5. AKUN:\n' +
