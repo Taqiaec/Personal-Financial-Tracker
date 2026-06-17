@@ -1330,7 +1330,7 @@ function openTxModal(tx) {
     updateTxModalForm();
 
     // Populate account select
-    var txAccountSelect = document.getElementById('tx-account');
+    var txAccountSelect = document.getElementById('tx-modal-account');
     txAccountSelect.innerHTML = '<option value="">-- Pilih Akun --</option>';
     var cashOpt = document.createElement('option');
     cashOpt.value = '__cash__';
@@ -1346,7 +1346,7 @@ function openTxModal(tx) {
 
     if (tx.type === 'transfer') {
         // Populate transfer-to select
-        var txTransferSelect = document.getElementById('tx-transfer-to-account');
+        var txTransferSelect = document.getElementById('tx-modal-transfer-to');
         txTransferSelect.innerHTML = '<option value="">-- Pilih Akun Tujuan --</option>';
         accCache.forEach(function (a) {
             var opt = document.createElement('option');
@@ -1357,7 +1357,7 @@ function openTxModal(tx) {
         txTransferSelect.value = tx.transferToAccountId || '';
     } else {
         // Populate category select
-        var txCategorySelect = document.getElementById('tx-category');
+        var txCategorySelect = document.getElementById('tx-modal-category');
         txCategorySelect.innerHTML = '';
         CATEGORIES[tx.type].forEach(function (cat) {
             var opt = document.createElement('option');
@@ -1400,7 +1400,7 @@ document.getElementById('tx-type-tabs').addEventListener('click', function (e) {
     updateTxModalForm();
     // Update category options
     if (currentTxType !== 'transfer') {
-        var txCategorySelect = document.getElementById('tx-category');
+        var txCategorySelect = document.getElementById('tx-modal-category');
         txCategorySelect.innerHTML = '';
         CATEGORIES[currentTxType].forEach(function (cat) {
             var opt = document.createElement('option');
@@ -1434,12 +1434,12 @@ document.getElementById('tx-form').addEventListener('submit', function (e) {
         amount: amount,
         type: currentTxType,
         date: date,
-        accountId: document.getElementById('tx-account').value || ''
+        accountId: document.getElementById('tx-modal-account').value || ''
     };
 
     if (currentTxType === 'transfer') {
         txData.category = '';
-        txData.transferToAccountId = document.getElementById('tx-transfer-to-account').value;
+        txData.transferToAccountId = document.getElementById('tx-modal-transfer-to').value;
         if (!txData.accountId || !txData.transferToAccountId) {
             showToast('Akun asal dan tujuan harus dipilih');
             submitBtn.disabled = false;
@@ -1453,7 +1453,7 @@ document.getElementById('tx-form').addEventListener('submit', function (e) {
             return;
         }
     } else {
-        txData.category = document.getElementById('tx-category').value;
+        txData.category = document.getElementById('tx-modal-category').value;
         txData.transferToAccountId = firebase.firestore.FieldValue.delete();
     }
 
