@@ -308,6 +308,25 @@ function getAccountById(id) {
     return accCache.find(function (a) { return a.id === id; });
 }
 
+// === SHARED HELPERS ===
+function buildAccountOptions(select, placeholder, includeCash) {
+    var curVal = select.value;
+    select.innerHTML = '<option value="">' + placeholder + '</option>';
+    if (includeCash) {
+        var cashOpt = document.createElement('option');
+        cashOpt.value = '__cash__';
+        cashOpt.textContent = 'Cash (Tanpa Akun)';
+        select.appendChild(cashOpt);
+    }
+    accCache.forEach(function (a) {
+        var opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = a.bankName + ' (' + getAccountTypeLabel(a.accountType) + ')';
+        select.appendChild(opt);
+    });
+    select.value = curVal;
+}
+
 // === UTILITY FUNCTIONS ===
 function getPaydayStart(monthKey) {
     if (monthKey && paydayOverridesCache[monthKey]) {
@@ -487,46 +506,17 @@ updateCategoryOptions();
 updateFormForType();
 
 function populateAccountSelect() {
-    var select = document.getElementById('tx-account');
-    var curVal = select.value;
-    select.innerHTML = '<option value="">-- Pilih Akun --</option>';
-    var cashOpt = document.createElement('option');
-    cashOpt.value = '__cash__';
-    cashOpt.textContent = 'Cash (Tanpa Akun)';
-    select.appendChild(cashOpt);
-    accCache.forEach(function (a) {
-        var opt = document.createElement('option');
-        opt.value = a.id;
-        opt.textContent = a.bankName + ' (' + getAccountTypeLabel(a.accountType) + ')';
-        select.appendChild(opt);
-    });
-    select.value = curVal;
+    buildAccountOptions(document.getElementById('tx-account'), '-- Pilih Akun --', true);
 }
 
 function populateTransferToAccountSelect() {
-    var select = document.getElementById('tx-transfer-to-account');
-    var curVal = select.value;
-    select.innerHTML = '<option value="">-- Pilih Akun Tujuan --</option>';
-    accCache.forEach(function (a) {
-        var opt = document.createElement('option');
-        opt.value = a.id;
-        opt.textContent = a.bankName + ' (' + getAccountTypeLabel(a.accountType) + ')';
-        select.appendChild(opt);
-    });
-    select.value = curVal;
+    buildAccountOptions(document.getElementById('tx-transfer-to-account'), '-- Pilih Akun Tujuan --', false);
 }
 
 // === DEBT FORM (Add Page) ===
 function populateDebtAccountDropdown() {
     var select = document.getElementById('add-debt-account');
-    if (!select) return;
-    select.innerHTML = '<option value="">-- Pilih Akun --</option>';
-    accCache.forEach(function (a) {
-        var opt = document.createElement('option');
-        opt.value = a.id;
-        opt.textContent = a.bankName + ' (' + getAccountTypeLabel(a.accountType) + ')';
-        select.appendChild(opt);
-    });
+    if (select) buildAccountOptions(select, '-- Pilih Akun --', false);
 }
 
 // Debt type tabs (hutang/piutang)
@@ -1334,31 +1324,13 @@ function openTxModal(tx) {
     updateTxModalForm();
 
     // Populate account select
-    var txAccountSelect = document.getElementById('tx-modal-account');
-    txAccountSelect.innerHTML = '<option value="">-- Pilih Akun --</option>';
-    var cashOpt = document.createElement('option');
-    cashOpt.value = '__cash__';
-    cashOpt.textContent = 'Cash (Tanpa Akun)';
-    txAccountSelect.appendChild(cashOpt);
-    accCache.forEach(function (a) {
-        var opt = document.createElement('option');
-        opt.value = a.id;
-        opt.textContent = a.bankName + ' (' + getAccountTypeLabel(a.accountType) + ')';
-        txAccountSelect.appendChild(opt);
-    });
-    txAccountSelect.value = tx.accountId || '';
+    buildAccountOptions(document.getElementById('tx-modal-account'), '-- Pilih Akun --', true);
+    document.getElementById('tx-modal-account').value = tx.accountId || '';
 
     if (tx.type === 'transfer') {
         // Populate transfer-to select
-        var txTransferSelect = document.getElementById('tx-modal-transfer-to');
-        txTransferSelect.innerHTML = '<option value="">-- Pilih Akun Tujuan --</option>';
-        accCache.forEach(function (a) {
-            var opt = document.createElement('option');
-            opt.value = a.id;
-            opt.textContent = a.bankName + ' (' + getAccountTypeLabel(a.accountType) + ')';
-            txTransferSelect.appendChild(opt);
-        });
-        txTransferSelect.value = tx.transferToAccountId || '';
+        buildAccountOptions(document.getElementById('tx-modal-transfer-to'), '-- Pilih Akun Tujuan --', false);
+        document.getElementById('tx-modal-transfer-to').value = tx.transferToAccountId || '';
     } else {
         // Populate category select
         var txCategorySelect = document.getElementById('tx-modal-category');
@@ -2246,16 +2218,7 @@ function renderDebtItems(debts) {
 
 function populateDebtAccountSelect() {
     var select = document.getElementById('debt-account');
-    if (!select) return;
-    var curVal = select.value;
-    select.innerHTML = '<option value="">-- Pilih Akun --</option>';
-    accCache.forEach(function (a) {
-        var opt = document.createElement('option');
-        opt.value = a.id;
-        opt.textContent = a.bankName + ' (' + getAccountTypeLabel(a.accountType) + ')';
-        select.appendChild(opt);
-    });
-    select.value = curVal;
+    if (select) buildAccountOptions(select, '-- Pilih Akun --', false);
 }
 
 // === ACCOUNT MODAL ===
@@ -2708,16 +2671,8 @@ function openPaymentModal(debtId) {
     document.getElementById('payment-date').value = new Date().toISOString().slice(0, 10);
     document.getElementById('payment-note').value = '';
     // Populate payment account dropdown
-    var pSelect = document.getElementById('payment-account');
-    pSelect.innerHTML = '<option value="">-- Pilih Akun --</option>';
-    accCache.forEach(function (a) {
-        var opt = document.createElement('option');
-        opt.value = a.id;
-        opt.textContent = a.bankName + ' (' + getAccountTypeLabel(a.accountType) + ')';
-        pSelect.appendChild(opt);
-    });
-    // Pre-select debt's linked account if set
-    pSelect.value = debt.accountId || '';
+    buildAccountOptions(document.getElementById('payment-account'), '-- Pilih Akun --', false);
+    document.getElementById('payment-account').value = debt.accountId || '';
 
     var infoEl = document.getElementById('payment-info');
     var label = debt.type === 'hutang' ? 'Hutang' : 'Piutang';
