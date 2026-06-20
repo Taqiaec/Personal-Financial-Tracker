@@ -428,11 +428,14 @@ function updateFormForType() {
     var isTransfer = currentType === 'transfer';
     var isDebt = currentType === 'debt';
     // Show/hide transaction form fields
-    var txFields = ['scanner-section', 'category-group', 'source-account-group', 'transfer-to-group', 'admin-fee-row', 'split-bill-section'];
+    var txFields = ['scanner-section', 'category-group', 'source-account-group', 'admin-fee-row', 'split-bill-section'];
     txFields.forEach(function (id) {
         var el = document.getElementById(id);
         if (el) el.style.display = isDebt ? 'none' : '';
     });
+    // Transfer-to-group only visible for transfer type
+    var transferToGroup = document.getElementById('transfer-to-group');
+    if (transferToGroup) transferToGroup.style.display = (isTransfer && !isDebt) ? '' : 'none';
     // Show/hide desc, amount, date (transaction form fields)
     var descGroup = document.getElementById('desc').closest('.form-group');
     var amountGroup = document.getElementById('amount').closest('.form-group');
@@ -443,7 +446,7 @@ function updateFormForType() {
     if (amountGroup) amountGroup.style.display = isDebt ? 'none' : '';
     if (dateGroup) dateGroup.style.display = isDebt ? 'none' : '';
     if (editIdEl) editIdEl.style.display = isDebt ? 'none' : '';
-    if (formActions) formActions.style.display = isDebt ? 'none' : '';
+    if (formActions) formActions.style.display = isDebt ? 'none' : 'flex';
     // Show/hide debt form section
     var debtSection = document.getElementById('debt-form-section');
     if (debtSection) debtSection.style.display = isDebt ? '' : 'none';
@@ -481,6 +484,7 @@ function updateCategoryOptions() {
 }
 
 updateCategoryOptions();
+updateFormForType();
 
 function populateAccountSelect() {
     var select = document.getElementById('tx-account');
