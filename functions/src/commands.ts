@@ -1222,7 +1222,7 @@ export async function handleTransfer(chatId: number, text: string): Promise<void
   }
 
   const beforeKe = body.substring(0, keIdx).trim();
-  const afterKe = body.substring(keIdx).replace(/^ke\s+/i, '').trim();
+  const afterKe = body.substring(keIdx).replace(/^\s*ke\s+/i, '').trim();
 
   // Parse beforeKe: [jumlah] [akun_asal]
   const beforeParts = beforeKe.split(/\s+/);
@@ -1508,7 +1508,7 @@ export async function handleBayar(chatId: number, text: string): Promise<void> {
   if (debt.type === 'hutang') {
     const txCategory = debt.category && CATEGORIES.expense.includes(debt.category)
       ? debt.category
-      : 'Hutang';
+      : 'Lainnya';
     await db().collection('users').doc(uid).collection('transactions').add({
       desc: 'Bayar Hutang: ' + debt.person + (note ? ' - ' + note : ''),
       amount: amount,
