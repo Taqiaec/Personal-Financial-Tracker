@@ -229,20 +229,6 @@ function getAccountBalance(accountId) {
         return sum + (t.type === 'income' ? t.amount : -t.amount);
     }, 0);
 
-    if (!isCredit && debtCache && debtCache.length > 0) {
-        debtCache.forEach(function (d) {
-            if (d.type === 'piutang' && d.accountId === accountId) {
-                txBalance -= (d.remainingAmount || 0);
-            }
-            var dpmts = debtPaymentsCache[d.id] || [];
-            dpmts.forEach(function (p) {
-                if (p.accountId === accountId) {
-                    txBalance += (d.type === 'piutang' ? p.amount : -p.amount);
-                }
-            });
-        });
-    }
-
     return txBalance;
 }
 
@@ -556,6 +542,21 @@ document.getElementById('add-debt-submit').addEventListener('click', function ()
         status: 'pending',
         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
         settledAt: null
+    }).then(function (debtDocRef) {
+        // Auto-create expense transaction saat debt baru dicatat
+        var txCategory = (category && CATEGORIES.expense.indexOf(category) !== -1) ? category : 'Lainnya';
+        var txDesc = (debtType === 'hutang' ? 'Hutang: ' : 'Piutang: ') + person + (desc ? ' - ' + desc : '');
+        return db.collection('users').doc(uid).collection('transactions').add({
+            desc: txDesc,
+            amount: amount,
+            type: 'expense',
+            category: txCategory,
+            date: date,
+            accountId: accountId || '',
+            debtId: debtDocRef.id,
+            debtType: debtType,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
     }).then(function () {
         showToast('Hutang/Piutang berhasil ditambahkan');
         // Reset debt form
@@ -574,6 +575,7 @@ document.getElementById('add-debt-submit').addEventListener('click', function ()
         showToast('Gagal menambahkan: ' + err.message);
     });
 });
+
 
 // Set default date for debt form
 document.getElementById('add-debt-date').value = new Date().toISOString().slice(0, 10);
@@ -852,8 +854,9 @@ function renderPaydayOverrides() {
 function renderDashboard() {
     var txns = txCache;
 
-    var piutangTotal = txns.filter(function (t) { return t.type === 'income' && t.category === '💰 Piutang'; }).reduce(function (s, t) { return s + t.amount; }, 0);
-    var incomeTotal = txns.filter(function (t) { return t.type === 'income' && t.category !== '💰 Piutang'; }).reduce(function (s, t) { return s + t.amount; }, 0);
+    // '💰 Piutang' = data lama (income dari bayar piutang). '💰 Piutang Kembali' = data baru (reversal expense piutang).
+    var piutangTotal = txns.filter(function (t) { return t.type === 'income' && (t.category === '\uD83D\uDCB0 Piutang' || t.category === '\uD83D\uDCB0 Piutang Kembali'); }).reduce(function (s, t) { return s + t.amount; }, 0);
+    var incomeTotal = txns.filter(function (t) { return t.type === 'income' && t.category !== '\uD83D\uDCB0 Piutang' && t.category !== '\uD83D\uDCB0 Piutang Kembali'; }).reduce(function (s, t) { return s + t.amount; }, 0);
     var expenseTotal = Math.max(0, txns.filter(function (t) { return t.type === 'expense' && !isExcludedFromCharts(t); }).reduce(function (s, t) { return s + t.amount; }, 0) - piutangTotal);
     var accountTotal = accCache.reduce(function (s, a) { return s + getAccountDisplayBalance(a); }, 0);
     var unassignedNet = txns.filter(function (t) { return !t.accountId && t.type !== 'transfer'; }).reduce(function (s, t) { return s + (t.type === 'income' ? t.amount : -t.amount); }, 0);
@@ -936,12 +939,13 @@ function renderPieChart(txns, monthKey) {
     canvas.style.display = 'block';
     empty.style.display = 'none';
 
-    // Subtract piutang payments from expense total
-    var piutangPayments = txns.filter(function (t) { return t.type === 'income' && t.category === '💰 Piutang'; });
+    // Subtract piutang payments from expense total (backward compat: '💰 Piutang' lama + '💰 Piutang Kembali' baru)
+    var piutangPayments = txns.filter(function (t) { return t.type === 'income' && (t.category === '\uD83D\uDCB0 Piutang' || t.category === '\uD83D\uDCB0 Piutang Kembali'); });
     if (monthKey) {
         piutangPayments = piutangPayments.filter(function (t) { return getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === monthKey; });
     }
     var piutangOffset = piutangPayments.reduce(function (s, t) { return s + t.amount; }, 0);
+
 
     var map = {};
     expenses.forEach(function (t) { map[t.category] = (map[t.category] || 0) + t.amount; });
@@ -1062,11 +1066,12 @@ function renderBarChart(txns) {
     for (var i = 5; i >= 0; i--) {
         var d = new Date(currentFinMonth.getFullYear(), currentFinMonth.getMonth() - i, 1);
         var key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-        var inc = txns.filter(function (t) { return t.type === 'income' && t.category !== '💰 Piutang' && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === key; }).reduce(function (s, t) { return s + t.amount; }, 0);
-        var piutangInMonth = txns.filter(function (t) { return t.type === 'income' && t.category === '💰 Piutang' && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === key; }).reduce(function (s, t) { return s + t.amount; }, 0);
+        var inc = txns.filter(function (t) { return t.type === 'income' && t.category !== '\uD83D\uDCB0 Piutang' && t.category !== '\uD83D\uDCB0 Piutang Kembali' && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === key; }).reduce(function (s, t) { return s + t.amount; }, 0);
+        var piutangInMonth = txns.filter(function (t) { return t.type === 'income' && (t.category === '\uD83D\uDCB0 Piutang' || t.category === '\uD83D\uDCB0 Piutang Kembali') && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === key; }).reduce(function (s, t) { return s + t.amount; }, 0);
         var exp = Math.max(0, txns.filter(function (t) { return t.type === 'expense' && !isExcludedFromCharts(t) && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === key; }).reduce(function (s, t) { return s + t.amount; }, 0) - piutangInMonth);
         months.push({ label: d.toLocaleDateString('id-ID', { month: 'short' }), inc: inc, exp: exp });
     }
+
 
     var dpr = window.devicePixelRatio || 1;
     var w = canvas.parentElement.clientWidth - 48;
@@ -1207,11 +1212,23 @@ function renderTransactions() {
     var finalType = document.getElementById('filter-type').value;
     var finalCat = document.getElementById('filter-category').value;
     var finalMonth = document.getElementById('filter-month').value;
+    var finalSort = document.getElementById('filter-sort').value;
 
     var filtered = txns;
     if (finalType !== 'all') filtered = filtered.filter(function (t) { return t.type === finalType; });
     if (finalCat !== 'all') filtered = filtered.filter(function (t) { return t.category === finalCat; });
     if (finalMonth !== 'all') filtered = filtered.filter(function (t) { return getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === finalMonth; });
+
+    // Sort
+    filtered = filtered.slice(); // copy agar tidak mutate cache
+    if (finalSort === 'amount-desc') {
+        filtered.sort(function (a, b) { return b.amount - a.amount; });
+    } else if (finalSort === 'amount-asc') {
+        filtered.sort(function (a, b) { return a.amount - b.amount; });
+    } else if (finalSort === 'date-asc') {
+        filtered.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+    }
+    // date-desc adalah default dari Firestore orderBy, tidak perlu re-sort
 
     document.getElementById('transaction-list').innerHTML = renderTransactionItems(filtered);
 }
@@ -1230,6 +1247,7 @@ document.getElementById('filter-type').addEventListener('change', function () {
 });
 document.getElementById('filter-category').addEventListener('change', renderTransactions);
 document.getElementById('filter-month').addEventListener('change', renderTransactions);
+document.getElementById('filter-sort').addEventListener('change', renderTransactions);
 
 // Pie chart month selector
 document.getElementById('pie-month-select').addEventListener('change', function () {
@@ -1757,18 +1775,18 @@ function renderBudgetProgress() {
         catMap[t.category] = (catMap[t.category] || 0) + t.amount;
     });
 
-    // Subtract paid piutang from split bill expenses
-    var monthPiutang = debtCache.filter(function (d) {
-        return d.type === 'piutang' && getMonthKey(d.date, getPaydayStart(d.date.slice(0, 7))) === currentMonth;
+    // Kurangi dengan pelunasan piutang agar budget menampilkan biaya bersih
+    var piutangKembaliTxns = txCache.filter(function (t) {
+        return t.type === 'income' && (t.category === '\uD83D\uDCB0 Piutang' || t.category === '\uD83D\uDCB0 Piutang Kembali') &&
+            getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === currentMonth;
     });
-    monthPiutang.forEach(function (d) {
-        var paid = d.amount - (d.remainingAmount != null ? d.remainingAmount : d.amount);
-        if (paid <= 0) return;
-        var matchTx = monthTxns.find(function (t) {
-            return t.desc === d.description && t.date === d.date;
-        });
-        if (matchTx && catMap[matchTx.category]) {
-            catMap[matchTx.category] = Math.max(0, catMap[matchTx.category] - paid);
+    piutangKembaliTxns.forEach(function (rt) {
+        if (rt.debtId) {
+            var relDebt = debtCache.find(function (d) { return d.id === rt.debtId; });
+            if (relDebt) {
+                var txCat = (relDebt.category && CATEGORIES.expense.indexOf(relDebt.category) !== -1) ? relDebt.category : 'Lainnya';
+                if (catMap[txCat]) catMap[txCat] = Math.max(0, catMap[txCat] - rt.amount);
+            }
         }
     });
 
@@ -1824,18 +1842,18 @@ function renderBudgetAlerts() {
         catMap[t.category] = (catMap[t.category] || 0) + t.amount;
     });
 
-    // Subtract paid piutang from split bill expenses
-    var monthPiutang = debtCache.filter(function (d) {
-        return d.type === 'piutang' && getMonthKey(d.date, getPaydayStart(d.date.slice(0, 7))) === currentMonth;
+    // Kurangi dengan pelunasan piutang agar alert menampilkan biaya bersih
+    var piutangKembaliTxns2 = txCache.filter(function (t) {
+        return t.type === 'income' && (t.category === '\uD83D\uDCB0 Piutang' || t.category === '\uD83D\uDCB0 Piutang Kembali') &&
+            getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === currentMonth;
     });
-    monthPiutang.forEach(function (d) {
-        var paid = d.amount - (d.remainingAmount != null ? d.remainingAmount : d.amount);
-        if (paid <= 0) return;
-        var matchTx = monthTxns.find(function (t) {
-            return t.desc === d.description && t.date === d.date;
-        });
-        if (matchTx && catMap[matchTx.category]) {
-            catMap[matchTx.category] = Math.max(0, catMap[matchTx.category] - paid);
+    piutangKembaliTxns2.forEach(function (rt) {
+        if (rt.debtId) {
+            var relDebt2 = debtCache.find(function (d) { return d.id === rt.debtId; });
+            if (relDebt2) {
+                var txCat2 = (relDebt2.category && CATEGORIES.expense.indexOf(relDebt2.category) !== -1) ? relDebt2.category : 'Lainnya';
+                if (catMap[txCat2]) catMap[txCat2] = Math.max(0, catMap[txCat2] - rt.amount);
+            }
         }
     });
 
@@ -2010,10 +2028,11 @@ function renderAccountsPage() {
 
     // Unassigned transactions (no accountId)
     var unassignedTxns = txCache.filter(function (t) { return !t.accountId; });
-    var unassignedIncome = unassignedTxns.filter(function (t) { return t.type === 'income' && t.category !== '💰 Piutang'; }).reduce(function (s, t) { return s + t.amount; }, 0);
-    var unassignedPiutang = unassignedTxns.filter(function (t) { return t.type === 'income' && t.category === '💰 Piutang'; }).reduce(function (s, t) { return s + t.amount; }, 0);
+    var unassignedIncome = unassignedTxns.filter(function (t) { return t.type === 'income' && t.category !== '\uD83D\uDCB0 Piutang' && t.category !== '\uD83D\uDCB0 Piutang Kembali'; }).reduce(function (s, t) { return s + t.amount; }, 0);
+    var unassignedPiutang = unassignedTxns.filter(function (t) { return t.type === 'income' && (t.category === '\uD83D\uDCB0 Piutang' || t.category === '\uD83D\uDCB0 Piutang Kembali'); }).reduce(function (s, t) { return s + t.amount; }, 0);
     var unassignedExpense = unassignedTxns.filter(function (t) { return t.type === 'expense' && !isExcludedFromCharts(t); }).reduce(function (s, t) { return s + t.amount; }, 0);
     var unassignedBalance = unassignedIncome + unassignedPiutang - unassignedExpense;
+
 
     if (!accounts.length && !unassignedTxns.length) {
         totalEl.style.display = 'none';
@@ -2025,24 +2044,29 @@ function renderAccountsPage() {
     totalEl.style.display = '';
     totalValue.textContent = 'Rp ' + formatCurrency(totalBalance);
 
-    // Debt-adjusted balance
+    // Piutang outstanding (uang yang masih perlu diterima kembali)
     var activePiutang = debtCache.filter(function (d) { return d.type === 'piutang' && d.status !== 'paid'; })
         .reduce(function (s, d) { return s + (d.remainingAmount || 0); }, 0);
     var activeHutang = debtCache.filter(function (d) { return d.type === 'hutang' && d.status !== 'paid'; })
         .reduce(function (s, d) { return s + (d.remainingAmount || 0); }, 0);
-    var afterDebtBalance = totalBalance + activePiutang - activeHutang;
-    document.getElementById('accounts-total-after-value').textContent = 'Rp ' + formatCurrency(afterDebtBalance);
+    // after-debt balance row — sembunyikan karena expense sudah dicatat langsung
+    var afterEl = document.getElementById('accounts-total-after-value');
+    if (afterEl) {
+        var afterRow = afterEl.closest('.accounts-total-after') || afterEl.parentElement;
+        if (afterRow) afterRow.style.display = 'none';
+    }
 
     // Debt summary section
     var debtSection = document.getElementById('accounts-debt-section');
     if (activePiutang > 0 || activeHutang > 0) {
         debtSection.style.display = '';
-        document.getElementById('acc-hutang-val').textContent = '−Rp ' + formatCurrency(activeHutang);
-        document.getElementById('acc-piutang-val').textContent = '+Rp ' + formatCurrency(activePiutang);
+        document.getElementById('acc-hutang-val').textContent = 'Rp ' + formatCurrency(activeHutang) + ' (belum lunas)';
+        document.getElementById('acc-piutang-val').textContent = 'Rp ' + formatCurrency(activePiutang) + ' (belum diterima)';
         var netDebt = activePiutang - activeHutang;
         var netEl = document.getElementById('acc-debt-net-val');
         netEl.textContent = (netDebt >= 0 ? '+' : '') + 'Rp ' + formatCurrency(netDebt);
         netEl.style.color = netDebt >= 0 ? 'var(--income)' : 'var(--expense)';
+
     } else {
         debtSection.style.display = 'none';
     }
@@ -2639,6 +2663,22 @@ document.getElementById('debt-form').addEventListener('submit', function (e) {
         debtData.settledAt = null;
         debtData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
         db.collection('users').doc(uid).collection('debts').add(debtData)
+            .then(function (debtDocRef) {
+                // Auto-create expense transaction saat debt baru dicatat
+                var txCategory = (category && CATEGORIES.expense.indexOf(category) !== -1) ? category : 'Lainnya';
+                var txDesc = (type === 'hutang' ? 'Hutang: ' : 'Piutang: ') + person + (desc ? ' - ' + desc : '');
+                return db.collection('users').doc(uid).collection('transactions').add({
+                    desc: txDesc,
+                    amount: amount,
+                    type: 'expense',
+                    category: txCategory,
+                    date: date,
+                    accountId: accountId || '',
+                    debtId: debtDocRef.id,
+                    debtType: type,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+            })
             .then(function () {
                 showToast('Hutang/piutang berhasil ditambahkan');
                 debtModal.classList.remove('show');
@@ -2745,27 +2785,22 @@ document.getElementById('payment-form').addEventListener('submit', function (e) 
         }
         return debtRef.update(updateData);
     }).then(function () {
-        // Create transaction for payment (ledger)
-        var txType = debt.type === 'piutang' ? 'income' : 'expense';
-        var txCategory;
+        // Piutang: pelunasan = income reversal. Hutang: hanya catatan, tidak buat transaksi baru.
         if (debt.type === 'piutang') {
-            txCategory = '💰 Piutang';
-        } else {
-            txCategory = (debt.category && CATEGORIES.expense.indexOf(debt.category) !== -1)
-                ? debt.category
-                : 'Hutang';
+            var txDesc = 'Diterima: ' + debt.person + (payNote ? ' - ' + payNote : '');
+            return db.collection('users').doc(uid).collection('transactions').add({
+                desc: txDesc,
+                amount: payAmount,
+                type: 'income',
+                category: '\uD83D\uDCB0 Piutang Kembali',
+                date: payDate,
+                accountId: payAccountId,
+                debtId: debtId,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
         }
-        var txPrefix = debt.type === 'piutang' ? 'Bayar: ' : 'Bayar Hutang: ';
-        var txDesc = txPrefix + debt.person + (payNote ? ' - ' + payNote : '');
-        return db.collection('users').doc(uid).collection('transactions').add({
-            desc: txDesc,
-            amount: payAmount,
-            type: txType,
-            category: txCategory,
-            date: payDate,
-            accountId: payAccountId,
-            createdAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        // Hutang: tidak buat transaksi (expense sudah dicatat saat hutang dibuat)
+        return Promise.resolve();
     }).then(function () {
         showToast('Pembayaran berhasil dicatat');
         paymentModal.classList.remove('show');
