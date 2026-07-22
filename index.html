@@ -102,6 +102,11 @@
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                         Hutang
                     </button></li>
+                    <li><button class="nav-btn" data-page="subscriptions">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h10M7 16h6"/></svg>
+                        Langganan
+                        <span class="nav-badge" id="sub-nav-badge" style="display:none;">0</span>
+                    </button></li>
                     <li><button class="nav-btn" data-page="add">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
                         Baru
@@ -192,11 +197,15 @@
                     </div>
                 </div>
 
+                <div class="dashboard-controls" style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin: 0; font-size: 1.1rem;">Pilih Bulan</h3>
+                    <select id="dashboard-month-select" class="chart-month-select" style="margin: 0; padding: 4px 8px; border-radius: 6px; border: 1px solid #e2e8f0;"></select>
+                </div>
+
                 <div class="charts-row">
                     <div class="chart-card">
                         <div class="chart-header">
                             <h3>Pengeluaran per Kategori</h3>
-                            <select id="pie-month-select" class="chart-month-select"></select>
                         </div>
                         <canvas id="pieChart"></canvas>
                         <p class="chart-empty" id="pie-empty">Belum ada data pengeluaran</p>
@@ -232,6 +241,23 @@
                             <span class="debt-dash-val" id="dash-piutang-val">Rp 0</span>
                         </div>
                     </div>
+                </div>
+                <div class="subscription-dash-section" id="sub-dashboard-section" style="display:none;background:var(--surface);border-radius:var(--radius-lg);padding:24px;box-shadow:var(--shadow-sm);margin-top:24px;">
+                    <div class="debt-dash-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                        <h3 style="font-size:1.05rem;font-weight:700;">Pelacak Langganan</h3>
+                        <button type="button" id="btn-dash-view-subs" style="font-size:.85rem;font-weight:600;color:var(--primary);background:none;border:none;cursor:pointer;">Lihat Semua &rarr;</button>
+                    </div>
+                    <div class="sub-dash-row" style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;">
+                        <div>
+                            <span style="font-size:.8rem;color:var(--text-secondary);display:block;">Komitmen Bulanan</span>
+                            <strong style="font-size:1.15rem;color:var(--text);" id="dash-sub-monthly-total">Rp 0</strong>
+                        </div>
+                        <div id="dash-sub-due-alert" style="display:none;background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:8px 12px;border-radius:var(--radius-sm);font-size:.85rem;font-weight:600;align-items:center;gap:8px;">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                            <span id="dash-sub-due-text">0 tagihan perlu dibayar</span>
+                        </div>
+                    </div>
+                    <div id="dash-sub-upcoming-list" style="margin-top:14px;display:grid;gap:8px;"></div>
                 </div>
                 <div class="portfolio-section" id="portfolio-section" style="display:none;">
                     <h3>Portofolio Investasi</h3>
@@ -621,6 +647,44 @@
                 <div id="debt-list"></div>
             </section>
 
+            <!-- SUBSCRIPTIONS -->
+            <section id="page-subscriptions" class="page">
+                <div class="section-header">
+                    <h2>Pelacak Langganan</h2>
+                    <button class="btn-primary" id="btn-add-sub">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+                        Tambah Langganan
+                    </button>
+                </div>
+                <div class="sub-summary-cards">
+                    <div class="summary-card balance">
+                        <div class="card-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h10M7 16h6"/></svg>
+                        </div>
+                        <span class="card-label">Total Komitmen Bulanan</span>
+                        <span class="card-value" id="sub-monthly-total">Rp 0</span>
+                    </div>
+                    <div class="summary-card expense">
+                        <div class="card-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                        </div>
+                        <span class="card-label">Belum Dibayar Periode Ini</span>
+                        <span class="card-value" id="sub-due-count">0 Tagihan</span>
+                    </div>
+                </div>
+                <div class="filter-bar">
+                    <div class="filter-group">
+                        <label>Filter</label>
+                        <select id="sub-filter-status">
+                            <option value="all">Semua Status</option>
+                            <option value="due" selected>Perlu Dibayar (Jatuh Tempo / Mendatang)</option>
+                            <option value="paid">Sudah Dibayar Bulan Ini</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="subscription-list" class="sub-list-grid"></div>
+            </section>
+
         </main>
 
         <!-- Investment Adjustment Modal -->
@@ -882,6 +946,62 @@
                     </div>
                 </form>
             </div>
+        </div>
+    </div>
+
+    <!-- Subscription Modal -->
+    <div class="modal-overlay" id="subscription-modal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 id="sub-modal-title">Tambah Langganan</h3>
+                <button class="modal-close" id="sub-modal-close">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <form id="subscription-form">
+                <input type="hidden" id="sub-id">
+                <div class="form-group">
+                    <label for="sub-name">Nama Langganan</label>
+                    <input type="text" id="sub-name" required placeholder="Contoh: Netflix Premium, Spotify Family">
+                </div>
+                <div class="form-group">
+                    <label for="sub-amount">Biaya (Rp)</label>
+                    <input type="number" id="sub-amount" required min="1" placeholder="186000">
+                </div>
+                <div class="form-row" style="display:flex;gap:12px;">
+                    <div class="form-group" style="flex:1;">
+                        <label for="sub-cycle">Siklus Tagihan</label>
+                        <select id="sub-cycle">
+                            <option value="monthly">Bulanan</option>
+                            <option value="yearly">Tahunan</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex:1;">
+                        <label for="sub-due-day">Tgl Tagihan (1-31)</label>
+                        <input type="number" id="sub-due-day" required min="1" max="31" value="1" placeholder="15">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="sub-category">Kategori Pengeluaran</label>
+                    <select id="sub-category" required></select>
+                </div>
+                <div class="form-group">
+                    <label for="sub-account">Akun Pembayaran</label>
+                    <select id="sub-account"></select>
+                </div>
+                <div class="form-group">
+                    <label>Mode Pembayaran</label>
+                    <div style="display:flex;gap:16px;margin-top:6px;">
+                        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:.875rem;">
+                            <input type="radio" name="sub-autoconfirm" value="false" checked> Manual (Konfirmasi dulu)
+                        </label>
+                        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:.875rem;">
+                            <input type="radio" name="sub-autoconfirm" value="true"> Otomatis (Oto-catat saat due)
+                        </label>
+                    </div>
+                </div>
+                <button type="submit" class="btn-primary" id="sub-submit-btn" style="margin-top:8px;">Simpan Langganan</button>
+            </form>
         </div>
     </div>
 

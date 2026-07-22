@@ -28,6 +28,7 @@ var subTypeCache = null;
 var paydayOverridesCache = {};
 var debtCache = [];
 var debtPaymentsCache = {}; // { debtId: [payment, ...] }
+var subCache = [];
 var uid = null;
 
 // Listener unsubscribe functions
@@ -38,6 +39,7 @@ var unsubBudget = null;
 var unsubSubType = null;
 var unsubPaydayOverrides = null;
 var unsubDebt = null;
+var unsubSub = null;
 
 function initDataListeners(userUid) {
     uid = userUid;
@@ -165,6 +167,32 @@ function initDataListeners(userUid) {
             showToast('Gagal memuat data hutang/piutang: ' + err.message);
             console.error(err);
         });
+
+    // Subscriptions listener
+    unsubSub = userRef.collection('subscriptions')
+        .onSnapshot(function (snap) {
+            subCache = snap.docs.map(function (doc) {
+                var data = doc.data();
+                return {
+                    id: doc.id,
+                    name: data.name || '',
+                    amount: data.amount || 0,
+                    billingCycle: data.billingCycle || 'monthly',
+                    dueDate: data.dueDate || 1,
+                    category: data.category || 'Tagihan',
+                    accountId: data.accountId || '',
+                    autoConfirm: data.autoConfirm === true,
+                    status: data.status || 'active',
+                    lastPaidPeriod: data.lastPaidPeriod || '',
+                    createdAt: data.createdAt
+                };
+            });
+            checkAutoSubscriptions();
+            renderActivePage();
+            renderSubscriptionNavBadge();
+        }, function (err) {
+            console.error('Subscription listener error:', err);
+        });
 }
 
 function getSubTypes(accountType) {
@@ -180,12 +208,14 @@ function cleanupDataListeners() {
     if (unsubSubType) { unsubSubType(); unsubSubType = null; }
     if (unsubPaydayOverrides) { unsubPaydayOverrides(); unsubPaydayOverrides = null; }
     if (unsubDebt) { unsubDebt(); unsubDebt = null; }
+    if (unsubSub) { unsubSub(); unsubSub = null; }
     txCache = [];
     accCache = [];
     budgetCache = {};
     paydayOverridesCache = {};
     debtCache = [];
     debtPaymentsCache = {};
+    subCache = [];
     uid = null;
 }
 
@@ -197,7 +227,9 @@ function renderActivePage() {
     else if (activePage.id === 'page-accounts') { renderAccountsPage(); renderSubTypeSettings(); }
     else if (activePage.id === 'page-budgets') renderBudgets();
     else if (activePage.id === 'page-debts') renderDebts();
+    else if (activePage.id === 'page-subscriptions') renderSubscriptionsPage();
     populateAccountSelect();
+    renderSubscriptionNavBadge();
 }
 
 // === UTILITY: ACCOUNT BALANCE (computed dynamically) ===
@@ -411,6 +443,7 @@ document.querySelectorAll('.nav-btn').forEach(function (btn) {
         if (btn.dataset.page === 'accounts') { renderAccountsPage(); renderSubTypeSettings(); }
         if (btn.dataset.page === 'budgets') renderBudgets();
         if (btn.dataset.page === 'debts') renderDebts();
+        if (btn.dataset.page === 'subscriptions') renderSubscriptionsPage();
         if (btn.dataset.page === 'add') { updateFormForType(); populateAccountSelect(); }
     });
 });
@@ -854,45 +887,77 @@ function renderPaydayOverrides() {
 function renderDashboard() {
     var txns = txCache;
 
-    // '💰 Piutang' = data lama (income dari bayar piutang). '💰 Piutang Kembali' = data baru (reversal expense piutang).
-    var piutangTotal = txns.filter(function (t) { return t.type === 'income' && (t.category === '\uD83D\uDCB0 Piutang' || t.category === '\uD83D\uDCB0 Piutang Kembali'); }).reduce(function (s, t) { return s + t.amount; }, 0);
-    var incomeTotal = txns.filter(function (t) { return t.type === 'income' && t.category !== '\uD83D\uDCB0 Piutang' && t.category !== '\uD83D\uDCB0 Piutang Kembali'; }).reduce(function (s, t) { return s + t.amount; }, 0);
-    var expenseTotal = Math.max(0, txns.filter(function (t) { return t.type === 'expense' && !isExcludedFromCharts(t); }).reduce(function (s, t) { return s + t.amount; }, 0) - piutangTotal);
-    var accountTotal = accCache.reduce(function (s, a) { return s + getAccountDisplayBalance(a); }, 0);
-    var unassignedNet = txns.filter(function (t) { return !t.accountId && t.type !== 'transfer'; }).reduce(function (s, t) { return s + (t.type === 'income' ? t.amount : -t.amount); }, 0);
-    var balance = accountTotal + unassignedNet;
-
-    document.getElementById('balance-display').textContent = 'Rp ' + formatCurrency(balance);
-    document.getElementById('income-display').textContent = 'Rp ' + formatCurrency(incomeTotal);
-    document.getElementById('expense-display').textContent = 'Rp ' + formatCurrency(expenseTotal);
-
-    var recent = txns.slice(0, 5);
-    document.getElementById('recent-list').innerHTML = renderTransactionItems(recent);
-
-    renderBarChart(txns);
-
-    // Populate pie chart month selector
-    var select = document.getElementById('pie-month-select');
+    // Populate dashboard month selector
+    var select = document.getElementById('dashboard-month-select');
     var monthKeys = [];
     var seen = {};
     txns.forEach(function (t) {
         var k = getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7)));
         if (!seen[k]) { seen[k] = true; monthKeys.push(k); }
     });
+    
+    // Ensure actual current month is always available
+    var todayStr = new Date().toISOString().split('T')[0];
+    var currentMonthKey = getMonthKey(todayStr, getPaydayStart(todayStr.slice(0, 7)));
+    if (!seen[currentMonthKey]) {
+        seen[currentMonthKey] = true;
+        monthKeys.push(currentMonthKey);
+    }
+    
     monthKeys.sort().reverse();
-    var savedPieMonth = select.value || (monthKeys.length > 0 ? monthKeys[0] : '');
+    var savedPieMonth = select.value || currentMonthKey;
     select.innerHTML = monthKeys.map(function (k) { return '<option value="' + k + '">' + getMonthLabel(k + '-01', getPaydayStart(k)) + '</option>'; }).join('');
     if (savedPieMonth) {
         var found = Array.from(select.options).some(function (o) { return o.value === savedPieMonth; });
         if (found) select.value = savedPieMonth;
     }
-    renderPieChart(txns, select.value || null);
-    renderBudgetProgress();
-    renderBudgetAlerts();
+
+    var selectedMonth = select.value || null;
+
+    renderDashboardSummaryCards(selectedMonth);
+
+    var recent = txns.slice(0, 5);
+    document.getElementById('recent-list').innerHTML = renderTransactionItems(recent);
+
+    renderBarChart(txns);
+
+    renderPieChart(txns, selectedMonth);
+    renderBudgetProgress(selectedMonth);
+    renderBudgetAlerts(selectedMonth);
     renderPortfolio();
     renderCreditSummary();
     renderDebtDashboardSummary();
+    renderSubscriptionDashboardSummary();
     initSimulasiPage();
+}
+
+function renderDashboardSummaryCards(selectedMonthKey) {
+    var txns = txCache;
+
+    // Saldo is all-time
+    var accountTotal = accCache.reduce(function (s, a) { return s + getAccountDisplayBalance(a); }, 0);
+    var unassignedNet = txns.filter(function (t) { return !t.accountId && t.type !== 'transfer'; }).reduce(function (s, t) { return s + (t.type === 'income' ? t.amount : -t.amount); }, 0);
+    var balance = accountTotal + unassignedNet;
+    document.getElementById('balance-display').textContent = 'Rp ' + formatCurrency(balance);
+
+    // Pemasukan dan Pengeluaran are per selected month
+    var currentMonth = selectedMonthKey;
+    if (!currentMonth) {
+        var today = new Date().toISOString().split('T')[0];
+        currentMonth = getMonthKey(today, getPaydayStart(today.slice(0, 7)));
+    }
+
+    var monthTxns = txns.filter(function(t) {
+        return getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === currentMonth;
+    });
+
+    // '💰 Piutang' = data lama (income dari bayar piutang). '💰 Piutang Kembali' = data baru (reversal expense piutang).
+    var piutangTotal = monthTxns.filter(function (t) { return t.type === 'income' && (t.category === '\uD83D\uDCB0 Piutang' || t.category === '\uD83D\uDCB0 Piutang Kembali'); }).reduce(function (s, t) { return s + t.amount; }, 0);
+    var incomeTotal = monthTxns.filter(function (t) { return t.type === 'income' && t.category !== '\uD83D\uDCB0 Piutang' && t.category !== '\uD83D\uDCB0 Piutang Kembali'; }).reduce(function (s, t) { return s + t.amount; }, 0);
+    var expenseTotal = Math.max(0, monthTxns.filter(function (t) { return t.type === 'expense' && !isExcludedFromCharts(t); }).reduce(function (s, t) { return s + t.amount; }, 0) - piutangTotal);
+
+    document.getElementById('income-display').textContent = 'Rp ' + formatCurrency(incomeTotal);
+    document.getElementById('expense-display').textContent = 'Rp ' + formatCurrency(expenseTotal);
 }
 
 function renderTransactionItems(txns) {
@@ -1250,8 +1315,12 @@ document.getElementById('filter-month').addEventListener('change', renderTransac
 document.getElementById('filter-sort').addEventListener('change', renderTransactions);
 
 // Pie chart month selector
-document.getElementById('pie-month-select').addEventListener('change', function () {
-    renderPieChart(txCache, document.getElementById('pie-month-select').value || null);
+document.getElementById('dashboard-month-select').addEventListener('change', function () {
+    var val = document.getElementById('dashboard-month-select').value || null;
+    renderDashboardSummaryCards(val);
+    renderPieChart(txCache, val);
+    renderBudgetProgress(val);
+    renderBudgetAlerts(val);
 });
 
 // Export CSV
@@ -1310,10 +1379,13 @@ function editTransaction(id) {
     if (!tx) return;
 
     // Route debt to debt-modal
-    if (tx.type === 'debt') {
-        var debt = debtCache.find(function (d) { return d.id === id; });
-        if (debt) openDebtModal(debt);
-        return;
+    if (tx.type === 'debt' || tx.debtId) {
+        var debtId = tx.debtId || id;
+        var debt = debtCache.find(function (d) { return d.id === debtId; });
+        if (debt) {
+            openDebtModal(debt);
+            return;
+        }
     }
 
     openTxModal(tx);
@@ -1324,8 +1396,12 @@ var txModal = document.getElementById('tx-modal');
 var currentTxType = 'expense';
 
 function openTxModal(tx) {
+    var submitBtn = document.getElementById('tx-submit-btn');
+    if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Simpan Perubahan';
+    }
     document.getElementById('tx-modal-title').textContent = 'Edit Transaksi';
-    document.getElementById('tx-submit-btn').textContent = 'Simpan Perubahan';
     document.getElementById('tx-edit-id').value = tx.id;
 
     document.getElementById('tx-desc').value = tx.desc;
@@ -1333,10 +1409,10 @@ function openTxModal(tx) {
     document.getElementById('tx-date').value = tx.date;
 
     // Set type tabs
-    currentTxType = tx.type;
+    currentTxType = tx.type || 'expense';
     var txTypeTabs = document.getElementById('tx-type-tabs');
     txTypeTabs.querySelectorAll('.type-tab').forEach(function (t) { t.classList.remove('active'); });
-    var targetTab = txTypeTabs.querySelector('[data-type="' + tx.type + '"]');
+    var targetTab = txTypeTabs.querySelector('[data-type="' + currentTxType + '"]');
     if (targetTab) targetTab.classList.add('active');
 
     updateTxModalForm();
@@ -1345,27 +1421,36 @@ function openTxModal(tx) {
     buildAccountOptions(document.getElementById('tx-modal-account'), '-- Pilih Akun --', true);
     document.getElementById('tx-modal-account').value = tx.accountId || '';
 
-    if (tx.type === 'transfer') {
+    if (currentTxType === 'transfer') {
         // Populate transfer-to select
         buildAccountOptions(document.getElementById('tx-modal-transfer-to'), '-- Pilih Akun Tujuan --', false);
         document.getElementById('tx-modal-transfer-to').value = tx.transferToAccountId || '';
     } else {
-        // Populate category select
+        // Populate category select (preserving current category even if special/custom)
         var txCategorySelect = document.getElementById('tx-modal-category');
         txCategorySelect.innerHTML = '';
-        CATEGORIES[tx.type].forEach(function (cat) {
+        var catList = (CATEGORIES[currentTxType] || []).slice();
+        if (tx.category && catList.indexOf(tx.category) === -1) {
+            catList.push(tx.category);
+        }
+        catList.forEach(function (cat) {
             var opt = document.createElement('option');
             opt.value = cat;
             opt.textContent = cat;
             txCategorySelect.appendChild(opt);
         });
-        txCategorySelect.value = tx.category;
+        txCategorySelect.value = tx.category || (catList[0] || '');
     }
 
     txModal.classList.add('show');
 }
 
 function closeTxModal() {
+    var submitBtn = document.getElementById('tx-submit-btn');
+    if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Simpan Perubahan';
+    }
     document.getElementById('tx-form').reset();
     document.getElementById('tx-edit-id').value = '';
     document.getElementById('tx-date').value = new Date().toISOString().slice(0, 10);
@@ -1392,11 +1477,14 @@ document.getElementById('tx-type-tabs').addEventListener('click', function (e) {
     document.querySelectorAll('#tx-type-tabs .type-tab').forEach(function (t) { t.classList.remove('active'); });
     tab.classList.add('active');
     updateTxModalForm();
-    // Update category options
-    if (currentTxType !== 'transfer') {
+
+    if (currentTxType === 'transfer') {
+        buildAccountOptions(document.getElementById('tx-modal-transfer-to'), '-- Pilih Akun Tujuan --', false);
+    } else {
         var txCategorySelect = document.getElementById('tx-modal-category');
         txCategorySelect.innerHTML = '';
-        CATEGORIES[currentTxType].forEach(function (cat) {
+        var catList = CATEGORIES[currentTxType] || [];
+        catList.forEach(function (cat) {
             var opt = document.createElement('option');
             opt.value = cat;
             opt.textContent = cat;
@@ -1414,12 +1502,12 @@ document.getElementById('tx-form').addEventListener('submit', function (e) {
     var editId = document.getElementById('tx-edit-id').value;
 
     if (!desc) { showToast('Deskripsi harus diisi'); return; }
-    if (!amount) { showToast('Jumlah harus diisi'); return; }
+    if (!amount || amount <= 0) { showToast('Jumlah harus diisi angka positif'); return; }
     if (!date) { showToast('Tanggal harus diisi'); return; }
     if (!uid || !editId) return;
 
     var submitBtn = document.getElementById('tx-submit-btn');
-    var originalText = submitBtn.textContent;
+    var originalText = 'Simpan Perubahan';
     submitBtn.disabled = true;
     submitBtn.innerHTML = '<span class="spinner"></span> Menyimpan...';
 
@@ -1448,11 +1536,19 @@ document.getElementById('tx-form').addEventListener('submit', function (e) {
         }
     } else {
         txData.category = document.getElementById('tx-modal-category').value;
+        if (!txData.category) {
+            showToast('Kategori harus dipilih');
+            submitBtn.disabled = false;
+            submitBtn.textContent = originalText;
+            return;
+        }
         txData.transferToAccountId = firebase.firestore.FieldValue.delete();
     }
 
     db.collection('users').doc(uid).collection('transactions').doc(editId).update(txData)
         .then(function () {
+            submitBtn.disabled = false;
+            submitBtn.textContent = originalText;
             closeTxModal();
             showToast('Transaksi diperbarui!');
         })
@@ -1758,13 +1854,16 @@ document.addEventListener('click', function (e) {
 });
 
 // === BUDGET PROGRESS (rendered on dashboard) ===
-function renderBudgetProgress() {
+function renderBudgetProgress(selectedMonthKey) {
     var container = document.getElementById('budget-progress');
     var section = document.getElementById('budget-progress-section');
     if (!container || !section) return;
 
-    var today = new Date().toISOString().split('T')[0];
-    var currentMonth = getMonthKey(today, getPaydayStart(today.slice(0, 7)));
+    var currentMonth = selectedMonthKey;
+    if (!currentMonth) {
+        var today = new Date().toISOString().split('T')[0];
+        currentMonth = getMonthKey(today, getPaydayStart(today.slice(0, 7)));
+    }
 
     var monthTxns = txCache.filter(function (t) {
         return t.type === 'expense' && !isExcludedFromCharts(t) && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === currentMonth;
@@ -1812,6 +1911,11 @@ function renderBudgetProgress() {
         if (a.pct >= 100) barColor = '#dc2626';
         else if (a.pct >= 80) barColor = '#f59e0b';
         else barColor = '#4f46e5';
+
+        var remaining = a.limit - a.spent;
+        var remainingColor = remaining >= 0 ? '#059669' : '#dc2626';
+        var remainingText = remaining >= 0 ? 'Sisa Rp ' + formatCurrency(remaining) : 'Melebihi Rp ' + formatCurrency(Math.abs(remaining));
+
         return '<div class="budget-progress-item">' +
             '<div class="budget-progress-label">' +
                 '<span>' + a.cat + '</span>' +
@@ -1820,18 +1924,24 @@ function renderBudgetProgress() {
             '<div class="budget-progress-bar">' +
                 '<div class="budget-progress-fill" style="width:' + a.pct + '%;background:' + barColor + ';"></div>' +
             '</div>' +
-            '<span class="budget-progress-pct">' + a.pct + '%</span>' +
+            '<div class="budget-progress-meta" style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">' +
+                '<span class="budget-progress-pct">' + a.pct + '%</span>' +
+                '<span class="budget-progress-remaining" style="font-size:.78rem;font-weight:600;color:' + remainingColor + ';">' + remainingText + '</span>' +
+            '</div>' +
             '</div>';
     }).join('');
 }
 
 // === BUDGET ALERTS (rendered on dashboard) ===
-function renderBudgetAlerts() {
+function renderBudgetAlerts(selectedMonthKey) {
     var container = document.getElementById('budget-alerts');
     if (!container) return;
 
-    var today = new Date().toISOString().split('T')[0];
-    var currentMonth = getMonthKey(today, getPaydayStart(today.slice(0, 7)));
+    var currentMonth = selectedMonthKey;
+    if (!currentMonth) {
+        var today = new Date().toISOString().split('T')[0];
+        currentMonth = getMonthKey(today, getPaydayStart(today.slice(0, 7)));
+    }
 
     var monthTxns = txCache.filter(function (t) {
         return t.type === 'expense' && !isExcludedFromCharts(t) && getMonthKey(t.date, getPaydayStart(t.date.slice(0, 7))) === currentMonth;
@@ -3379,6 +3489,423 @@ function buatAkunDariSimulasi() {
 
     showToast('Isi nama bank/akun lalu simpan.');
 }
+
+// === SUBSCRIPTION TRACKER LOGIC ===
+function getCurrentPeriod(cycle) {
+    var now = new Date();
+    var y = now.getFullYear();
+    var m = String(now.getMonth() + 1).padStart(2, '0');
+    return cycle === 'yearly' ? String(y) : (y + '-' + m);
+}
+
+function getSubStatus(sub) {
+    var now = new Date();
+    var curYear = now.getFullYear();
+    var curMonth = now.getMonth();
+    var today = new Date(curYear, curMonth, now.getDate());
+
+    var curPeriod = getCurrentPeriod(sub.billingCycle);
+    var isPaid = (sub.lastPaidPeriod === curPeriod);
+
+    var maxDays = new Date(curYear, curMonth + 1, 0).getDate();
+    var targetDay = Math.min(sub.dueDate || 1, maxDays);
+    var dueObj = new Date(curYear, curMonth, targetDay);
+
+    var diffMs = dueObj.getTime() - today.getTime();
+    var diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+    if (isPaid) {
+        return { code: 'paid', label: 'Sudah Dibayar Bulan Ini', isPaid: true, diffDays: diffDays };
+    }
+    if (diffDays < 0) {
+        return { code: 'due', label: 'Jatuh Tempo (' + Math.abs(diffDays) + ' hari lalu)', isPaid: false, diffDays: diffDays };
+    }
+    if (diffDays === 0) {
+        return { code: 'due', label: 'Jatuh Tempo Hari Ini', isPaid: false, diffDays: 0 };
+    }
+    if (diffDays <= 3) {
+        return { code: 'due_soon', label: 'Jatuh Tempo (H-' + diffDays + ')', isPaid: false, diffDays: diffDays };
+    }
+    return { code: 'upcoming', label: 'Tgl ' + targetDay + ' (H-' + diffDays + ')', isPaid: false, diffDays: diffDays };
+}
+
+function checkAutoSubscriptions() {
+    if (!uid || !subCache || subCache.length === 0) return;
+    subCache.forEach(function (sub) {
+        if (sub.status === 'active' && sub.autoConfirm) {
+            var st = getSubStatus(sub);
+            if (!st.isPaid && st.diffDays <= 0) {
+                confirmSubscriptionPayment(sub.id, true);
+            }
+        }
+    });
+}
+
+function confirmSubscriptionPayment(subId, isAuto) {
+    if (!uid) return;
+    var sub = subCache.find(function (s) { return s.id === subId; });
+    if (!sub) return;
+
+    var curPeriod = getCurrentPeriod(sub.billingCycle);
+    if (sub.lastPaidPeriod === curPeriod) {
+        showToast('Langganan "' + sub.name + '" sudah dibayar untuk periode ini.');
+        return;
+    }
+
+    var todayStr = new Date().toISOString().slice(0, 10);
+    var txData = {
+        desc: 'Pembayaran Langganan: ' + sub.name,
+        amount: sub.amount,
+        type: 'expense',
+        category: sub.category || 'Tagihan',
+        date: todayStr,
+        accountId: sub.accountId || '',
+        subscriptionId: sub.id,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+
+    db.collection('users').doc(uid).collection('transactions').add(txData)
+        .then(function () {
+            return db.collection('users').doc(uid).collection('subscriptions').doc(subId).update({
+                lastPaidPeriod: curPeriod
+            });
+        })
+        .then(function () {
+            showToast((isAuto ? '[Otomatis] ' : '') + 'Pembayaran "' + sub.name + '" Rp ' + formatCurrency(sub.amount) + ' berhasil dicatat!');
+        })
+        .catch(function (err) {
+            showToast('Gagal mencatat pembayaran langganan: ' + err.message);
+        });
+}
+
+function renderSubscriptionNavBadge() {
+    var badge = document.getElementById('sub-nav-badge');
+    if (!badge) return;
+    var dueCount = 0;
+    subCache.forEach(function (sub) {
+        if (sub.status === 'active') {
+            var st = getSubStatus(sub);
+            if (!st.isPaid && st.diffDays <= 3) {
+                dueCount++;
+            }
+        }
+    });
+    if (dueCount > 0) {
+        badge.textContent = dueCount;
+        badge.style.display = 'inline-block';
+    } else {
+        badge.style.display = 'none';
+    }
+}
+
+function renderSubscriptionDashboardSummary() {
+    var dashSection = document.getElementById('sub-dashboard-section');
+    if (!dashSection) return;
+
+    if (!subCache || subCache.length === 0) {
+        dashSection.style.display = 'none';
+        return;
+    }
+
+    dashSection.style.display = 'block';
+
+    var monthlyTotal = 0;
+    var dueCount = 0;
+    var subItemsHtml = '';
+
+    subCache.forEach(function (sub) {
+        if (sub.status !== 'active') return;
+        var monthlyEq = sub.billingCycle === 'yearly' ? Math.round(sub.amount / 12) : sub.amount;
+        monthlyTotal += monthlyEq;
+
+        var st = getSubStatus(sub);
+        if (!st.isPaid && st.diffDays <= 3) {
+            dueCount++;
+        }
+    });
+
+    document.getElementById('dash-sub-monthly-total').textContent = 'Rp ' + formatCurrency(monthlyTotal) + ' / bulan';
+
+    var alertEl = document.getElementById('dash-sub-due-alert');
+    var alertTextEl = document.getElementById('dash-sub-due-text');
+    if (dueCount > 0) {
+        alertTextEl.textContent = dueCount + ' tagihan perlu dibayar';
+        alertEl.style.display = 'inline-flex';
+    } else {
+        alertEl.style.display = 'none';
+    }
+
+    var sorted = subCache.filter(function (s) { return s.status === 'active'; }).sort(function (a, b) {
+        var stA = getSubStatus(a);
+        var stB = getSubStatus(b);
+        if (stA.isPaid !== stB.isPaid) return stA.isPaid ? 1 : -1;
+        return stA.diffDays - stB.diffDays;
+    }).slice(0, 3);
+
+    subItemsHtml = sorted.map(function (sub) {
+        var st = getSubStatus(sub);
+        var badgeClass = st.isPaid ? 'status-paid' : (st.code === 'due' ? 'status-due' : (st.code === 'due_soon' ? 'status-due-soon' : 'status-upcoming'));
+        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--surface-alt);border-radius:var(--radius-sm);font-size:.85rem;">' +
+            '<div><strong>' + escapeHtml(sub.name) + '</strong> <span style="font-size:.75rem;color:var(--text-secondary);">' + escapeHtml(sub.category) + '</span></div>' +
+            '<div style="display:flex;align-items:center;gap:10px;">' +
+            '<strong>Rp ' + formatCurrency(sub.amount) + '</strong>' +
+            '<span class="sub-badge ' + badgeClass + '">' + st.label + '</span>' +
+            '</div></div>';
+    }).join('');
+
+    document.getElementById('dash-sub-upcoming-list').innerHTML = subItemsHtml;
+}
+
+function renderSubscriptionsPage() {
+    var listEl = document.getElementById('subscription-list');
+    if (!listEl) return;
+
+    var filterStatus = document.getElementById('sub-filter-status') ? document.getElementById('sub-filter-status').value : 'all';
+
+    var monthlyTotal = 0;
+    var dueCount = 0;
+
+    subCache.forEach(function (sub) {
+        if (sub.status !== 'active') return;
+        var monthlyEq = sub.billingCycle === 'yearly' ? Math.round(sub.amount / 12) : sub.amount;
+        monthlyTotal += monthlyEq;
+
+        var st = getSubStatus(sub);
+        if (!st.isPaid) {
+            dueCount++;
+        }
+    });
+
+    document.getElementById('sub-monthly-total').textContent = 'Rp ' + formatCurrency(monthlyTotal);
+    document.getElementById('sub-due-count').textContent = dueCount + ' Tagihan';
+
+    var filtered = subCache.filter(function (sub) {
+        if (sub.status !== 'active') return false;
+        var st = getSubStatus(sub);
+        if (filterStatus === 'due') return !st.isPaid;
+        if (filterStatus === 'paid') return st.isPaid;
+        return true;
+    });
+
+    filtered.sort(function (a, b) {
+        var stA = getSubStatus(a);
+        var stB = getSubStatus(b);
+        if (stA.isPaid !== stB.isPaid) return stA.isPaid ? 1 : -1;
+        return stA.diffDays - stB.diffDays;
+    });
+
+    if (filtered.length === 0) {
+        listEl.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:36px;color:var(--text-secondary);background:var(--surface);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);">' +
+            '<p style="font-weight:600;font-size:1.05rem;margin-bottom:4px;">Tidak ada langganan</p>' +
+            '<p style="font-size:.85rem;color:var(--text-muted);">Klik "Tambah Langganan" untuk mencatat pengeluaran rutin Anda.</p>' +
+            '</div>';
+        return;
+    }
+
+    listEl.innerHTML = filtered.map(function (sub) {
+        var st = getSubStatus(sub);
+        var acc = getAccountById(sub.accountId);
+        var accName = acc ? acc.bankName : 'Cash / Tanpa Akun';
+        var badgeClass = st.isPaid ? 'status-paid' : (st.code === 'due' ? 'status-due' : (st.code === 'due_soon' ? 'status-due-soon' : 'status-upcoming'));
+        var cycleLabel = sub.billingCycle === 'yearly' ? 'Tahunan' : 'Bulanan';
+        var modeBadgeClass = sub.autoConfirm ? 'mode-auto' : 'mode-manual';
+        var modeLabel = sub.autoConfirm ? 'Otomatis' : 'Manual';
+
+        var actionButton = '';
+        if (st.isPaid) {
+            actionButton = '<button type="button" class="btn-sub-paid" disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Lunas Periode Ini</button>';
+        } else {
+            actionButton = '<button type="button" class="btn-sub-confirm" data-confirm-sub="' + sub.id + '"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Konfirmasi Bayar</button>';
+        }
+
+        return '<div class="sub-card">' +
+            '<div class="sub-card-header">' +
+            '<div>' +
+            '<h3 class="sub-card-title">' + escapeHtml(sub.name) + '</h3>' +
+            '<span class="sub-card-cycle">' + cycleLabel + ' · Tgl ' + sub.dueDate + '</span>' +
+            '</div>' +
+            '<div style="text-align:right;">' +
+            '<div class="sub-card-amount">Rp ' + formatCurrency(sub.amount) + '</div>' +
+            '</div>' +
+            '</div>' +
+            '<div class="sub-card-details">' +
+            '<span class="sub-badge ' + badgeClass + '">' + st.label + '</span>' +
+            '<span class="sub-badge ' + modeBadgeClass + '">Konfirmasi: ' + modeLabel + '</span>' +
+            '<span class="sub-badge" style="background:var(--surface-alt);color:var(--text-secondary);">' + escapeHtml(sub.category) + '</span>' +
+            '<span class="sub-badge" style="background:var(--surface-alt);color:var(--text-secondary);">' + escapeHtml(accName) + '</span>' +
+            '</div>' +
+            '<div class="sub-card-actions">' +
+            actionButton +
+            '<button type="button" class="sub-icon-btn" data-edit-sub="' + sub.id + '" title="Edit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
+            '<button type="button" class="sub-icon-btn" data-delete-sub="' + sub.id + '" title="Hapus"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
+            '</div>' +
+            '</div>';
+    }).join('');
+}
+
+function openSubscriptionModal(sub) {
+    var modal = document.getElementById('subscription-modal');
+    if (!modal) return;
+
+    var catSelect = document.getElementById('sub-category');
+    catSelect.innerHTML = '';
+    CATEGORIES.expense.forEach(function (cat) {
+        var opt = document.createElement('option');
+        opt.value = cat;
+        opt.textContent = cat;
+        catSelect.appendChild(opt);
+    });
+
+    var accSelect = document.getElementById('sub-account');
+    buildAccountOptions(accSelect, '-- Pilih Akun --', true);
+
+    if (sub) {
+        document.getElementById('sub-modal-title').textContent = 'Edit Langganan';
+        document.getElementById('sub-id').value = sub.id;
+        document.getElementById('sub-name').value = sub.name;
+        document.getElementById('sub-amount').value = sub.amount;
+        document.getElementById('sub-cycle').value = sub.billingCycle || 'monthly';
+        document.getElementById('sub-due-day').value = sub.dueDate || 1;
+        document.getElementById('sub-category').value = sub.category || 'Tagihan';
+        document.getElementById('sub-account').value = sub.accountId || '';
+        var autoRadio = modal.querySelector('input[name="sub-autoconfirm"][value="' + (sub.autoConfirm ? 'true' : 'false') + '"]');
+        if (autoRadio) autoRadio.checked = true;
+    } else {
+        document.getElementById('sub-modal-title').textContent = 'Tambah Langganan';
+        document.getElementById('sub-id').value = '';
+        document.getElementById('subscription-form').reset();
+        document.getElementById('sub-due-day').value = 1;
+        document.getElementById('sub-cycle').value = 'monthly';
+        var defaultAuto = modal.querySelector('input[name="sub-autoconfirm"][value="false"]');
+        if (defaultAuto) defaultAuto.checked = true;
+    }
+
+    modal.classList.add('show');
+}
+
+// Subscription modal event listeners
+(function () {
+    var modal = document.getElementById('subscription-modal');
+    var btnAdd = document.getElementById('btn-add-sub');
+    var btnClose = document.getElementById('sub-modal-close');
+    var form = document.getElementById('subscription-form');
+    var filterStatus = document.getElementById('sub-filter-status');
+
+    if (btnAdd) {
+        btnAdd.addEventListener('click', function () { openSubscriptionModal(null); });
+    }
+    if (btnClose) {
+        btnClose.addEventListener('click', function () { modal.classList.remove('show'); });
+    }
+    if (modal) {
+        modal.addEventListener('click', function (e) {
+            if (e.target === modal) modal.classList.remove('show');
+        });
+    }
+    if (filterStatus) {
+        filterStatus.addEventListener('change', function () { renderSubscriptionsPage(); });
+    }
+
+    if (form) {
+        form.addEventListener('submit', function (e) {
+            e.preventDefault();
+            if (!uid) return;
+
+            var subId = document.getElementById('sub-id').value;
+            var name = document.getElementById('sub-name').value.trim();
+            var amount = parseInt(document.getElementById('sub-amount').value) || 0;
+            var cycle = document.getElementById('sub-cycle').value;
+            var dueDay = parseInt(document.getElementById('sub-due-day').value) || 1;
+            var category = document.getElementById('sub-category').value;
+            var accountId = document.getElementById('sub-account').value;
+            var autoConfirm = modal.querySelector('input[name="sub-autoconfirm"]:checked').value === 'true';
+
+            if (!name || amount <= 0 || !category) {
+                showToast('Mohon isi nama, biaya, dan kategori.');
+                return;
+            }
+
+            var subData = {
+                name: name,
+                amount: amount,
+                billingCycle: cycle,
+                dueDate: dueDay,
+                category: category,
+                accountId: accountId || '',
+                autoConfirm: autoConfirm,
+                status: 'active'
+            };
+
+            var submitBtn = document.getElementById('sub-submit-btn');
+            var origText = submitBtn.textContent;
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="spinner"></span> Menyimpan...';
+
+            var promise;
+            if (subId) {
+                promise = db.collection('users').doc(uid).collection('subscriptions').doc(subId).update(subData);
+            } else {
+                subData.lastPaidPeriod = '';
+                subData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+                promise = db.collection('users').doc(uid).collection('subscriptions').add(subData);
+            }
+
+            promise.then(function () {
+                modal.classList.remove('show');
+                submitBtn.disabled = false;
+                submitBtn.textContent = origText;
+                showToast(subId ? 'Langganan diperbarui!' : 'Langganan berhasil ditambahkan!');
+            }).catch(function (err) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = origText;
+                showToast('Gagal menyimpan: ' + err.message);
+            });
+        });
+    }
+
+    // Delegation listener for subscriptions page & dashboard link
+    document.addEventListener('click', function (e) {
+        var confirmBtn = e.target.closest('[data-confirm-sub]');
+        if (confirmBtn) {
+            var subId = confirmBtn.dataset.confirmSub;
+            confirmSubscriptionPayment(subId, false);
+            return;
+        }
+
+        var editBtn = e.target.closest('[data-edit-sub]');
+        if (editBtn) {
+            var editId = editBtn.dataset.editSub;
+            var sub = subCache.find(function (s) { return s.id === editId; });
+            if (sub) openSubscriptionModal(sub);
+            return;
+        }
+
+        var deleteBtn = e.target.closest('[data-delete-sub]');
+        if (deleteBtn) {
+            var deleteId = deleteBtn.dataset.deleteSub;
+            var s = subCache.find(function (x) { return x.id === deleteId; });
+            if (!s) return;
+            if (!confirm('Hapus langganan "' + s.name + '" (Rp ' + formatCurrency(s.amount) + ')?')) return;
+            if (!uid) return;
+            db.collection('users').doc(uid).collection('subscriptions').doc(deleteId).delete()
+                .then(function () { showToast('Langganan dihapus'); })
+                .catch(function (err) { showToast('Gagal menghapus: ' + err.message); });
+            return;
+        }
+
+        var dashViewBtn = e.target.closest('#btn-dash-view-subs');
+        if (dashViewBtn) {
+            document.querySelectorAll('.nav-btn').forEach(function (b) { b.classList.remove('active'); });
+            var navBtn = document.querySelector('[data-page="subscriptions"]');
+            if (navBtn) navBtn.classList.add('active');
+            document.querySelectorAll('.page').forEach(function (p) { p.classList.remove('active'); });
+            var pageEl = document.getElementById('page-subscriptions');
+            if (pageEl) pageEl.classList.add('active');
+            renderSubscriptionsPage();
+            return;
+        }
+    });
+})();
 
 // === TELEGRAM LINK ===
 (function () {
